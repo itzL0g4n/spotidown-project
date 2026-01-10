@@ -144,7 +144,7 @@ def download_single_item(search_query, output_folder, metadata=None):
         'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
         'quiet': True,
         'no_warnings': True,
-        'default_search': 'ytsearch1', # Quan trọng: Tự động search kết quả đầu tiên
+        'default_search': 'scsearch1', # CHUYỂN SANG SOUNDCLOUD SEARCH
     }
 
     try:
@@ -152,7 +152,7 @@ def download_single_item(search_query, output_folder, metadata=None):
             # Search và tải
             info = ydl.extract_info(search_query, download=True)
             
-            # ytsearch trả về list entries, lấy phần tử đầu tiên
+            # search trả về list entries, lấy phần tử đầu tiên
             if 'entries' in info:
                 info = info['entries'][0]
             
@@ -160,7 +160,7 @@ def download_single_item(search_query, output_folder, metadata=None):
             file_path = find_downloaded_file(output_folder, video_id)
 
             if file_path:
-                # Nếu có metadata từ Spotify truyền vào thì dùng, không thì dùng của YouTube
+                # Nếu có metadata từ Spotify truyền vào thì dùng, không thì dùng của nguồn tải
                 title = metadata['name'] if metadata else info.get('title', 'audio')
                 artist = metadata['artist'] if metadata else info.get('uploader', 'Unknown')
                 
@@ -196,9 +196,9 @@ def download_single_item(search_query, output_folder, metadata=None):
         return None, None
 
 def download_audio_logic(url, output_folder=DOWNLOAD_FOLDER, is_playlist=False):
-    """Logic tải thông minh: Tự chuyển Spotify Link -> YouTube Search"""
+    """Logic tải thông minh: Tự chuyển Spotify Link -> SoundCloud Search"""
     
-    # 1. XỬ LÝ LINK SPOTIFY (FIX LỖI DRM)
+    # 1. XỬ LÝ LINK SPOTIFY
     if 'spotify.com' in url:
         info = get_spotify_info(url)
         if not info: raise Exception("Không lấy được thông tin Spotify để tải.")
@@ -210,9 +210,9 @@ def download_audio_logic(url, output_folder=DOWNLOAD_FOLDER, is_playlist=False):
             if not os.path.exists(final_folder): os.makedirs(final_folder)
             
             # Duyệt qua từng bài và tải
-            # Lưu ý: Nếu playlist dài sẽ lâu, đây là logic đơn giản
             for track in info['tracks']:
-                query = f"{track['name']} {track['artist']} audio"
+                # Bỏ từ khóa 'audio' vì SoundCloud mặc định là audio
+                query = f"{track['name']} {track['artist']}" 
                 download_single_item(query, final_folder, metadata=track)
                 
             return final_folder, album_name
@@ -220,21 +220,17 @@ def download_audio_logic(url, output_folder=DOWNLOAD_FOLDER, is_playlist=False):
         # Nếu là bài lẻ (Track)
         else:
             final_folder = output_folder
-            # Lấy track đầu tiên (vì link track chỉ có 1 track)
+            # Lấy track đầu tiên
             track = info['tracks'][0]
-            query = f"{track['name']} {track['artist']} audio"
+            query = f"{track['name']} {track['artist']}"
             return download_single_item(query, final_folder, metadata=track)
 
-    # 2. XỬ LÝ LINK YOUTUBE (Giữ nguyên logic cũ)
+    # 2. XỬ LÝ LINK TRỰC TIẾP (SoundCloud/YouTube/Khác)
     else:
-        # Code cũ cho YouTube trực tiếp
-        # ... Logic tương tự nhưng pass url trực tiếp ...
-        # Để code gọn, ta tái sử dụng download_single_item nhưng pass URL thay vì query
-        # Lưu ý: Playlist YouTube cần loop riêng, nhưng tạm thời focus fix Single Spotify
+        # Nếu user đưa link trực tiếp thì vẫn tải bình thường
         if not is_playlist:
             return download_single_item(url, output_folder)
         else:
-            # Playlist YouTube (Logic cũ dùng yt-dlp playlist mode)
             try:
                 with yt_dlp.YoutubeDL({'quiet': True, 'extract_flat': True}) as ydl:
                     pre_info = ydl.extract_info(url, download=False)
@@ -253,8 +249,6 @@ def download_audio_logic(url, output_folder=DOWNLOAD_FOLDER, is_playlist=False):
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([url])
                     
-                # Hậu xử lý đổi tên file trong folder (để đơn giản hóa)
-                # ... (Phần này giữ logic cũ hoặc cải thiện sau)
                 return final_folder, album_name
             except Exception as e:
                 raise e
@@ -282,7 +276,6 @@ def download_track():
     data = request.json
     url = data.get('url')
     try:
-        # Logic mới đã được tích hợp
         file_path, filename = download_audio_logic(url, is_playlist=False)
         
         if not file_path: return jsonify({'error': 'Không tìm thấy file sau khi tải'}), 500
