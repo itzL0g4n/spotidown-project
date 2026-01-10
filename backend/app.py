@@ -46,7 +46,7 @@ CHECK_INTERVAL = 600
 def auto_cleanup_task():
     while True:
         try:
-            # print("🧹 Đang quét dọn file rác...") # Tắt log cho đỡ rối
+            # print("🧹 Đang quét dọn file rác...") 
             now = time.time()
             count = 0
             for filename in os.listdir(DOWNLOAD_FOLDER):
@@ -158,14 +158,9 @@ def download_from_youtube(query, output_path):
         'nocheckcertificate': True,
         # Nếu có cookies thì dùng
         'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
-        # Giả lập User Agent
+        # Giả lập User Agent giống trình duyệt thật
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        # Thay đổi chiến thuật: Dùng iOS client để tránh bị chặn 403 tốt hơn
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['ios', 'web'], 
-            }
-        }
+        # XÓA BỎ extractor_args ép buộc client ios/android đi
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
