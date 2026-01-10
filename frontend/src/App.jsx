@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Download, Music, Search, Disc, CheckCircle2, AlertCircle, Sparkles, List, Play, FileArchive, Loader2, BarChart3, ChevronRight } from 'lucide-react';
 
+// URL Backend trên Render (Đúng như file cũ của bạn)
+const API_BASE_URL = 'https://spotidown-project.onrender.com';
+
 export default function App() {
   const [url, setUrl] = useState('');
   const [status, setStatus] = useState('idle'); // idle, processing, success, error
@@ -46,7 +49,7 @@ export default function App() {
     setZipStatusText('');
 
     try {
-      const response = await fetch('https://spotidown-project.onrender.com/api/info', {
+      const response = await fetch(`${API_BASE_URL}/api/info`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: url }),
@@ -63,15 +66,16 @@ export default function App() {
       }
     } catch (error) {
       setStatus('error');
-      setMessage('Không kết nối được Backend.');
+      setMessage('Không kết nối được Server (Render có thể đang khởi động, đợi 1 chút nhé).');
     }
   };
 
   const downloadTrack = async (trackUrl, trackId) => {
+    // Đặt trạng thái loading cho track cụ thể
     setTrackStatuses(prev => ({ ...prev, [trackId]: 'loading' }));
 
     try {
-      const response = await fetch('https://spotidown-project.onrender.com/api/download_track', {
+      const response = await fetch(`${API_BASE_URL}/api/download_track`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: trackUrl }),
@@ -82,7 +86,10 @@ export default function App() {
       if (response.ok) {
         setTrackStatuses(prev => ({ ...prev, [trackId]: 'success' }));
         const link = document.createElement('a');
-        link.href = `https://spotidown-project.onrender.com${data.download_url}`;
+        // Xử lý link tải về (đảm bảo full path)
+        link.href = data.download_url.startsWith('http') 
+            ? data.download_url 
+            : `${API_BASE_URL}${data.download_url}`;
         link.download = '';
         document.body.appendChild(link);
         link.click();
@@ -112,7 +119,7 @@ export default function App() {
     }, 4000); 
 
     try {
-      const response = await fetch('https://spotidown-project.onrender.com/api/download_zip', {
+      const response = await fetch(`${API_BASE_URL}/api/download_zip`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: url }),
@@ -123,7 +130,9 @@ export default function App() {
       if (response.ok) {
         setZipStatusText('Hoàn tất! Đang tải file về máy...');
         const link = document.createElement('a');
-        link.href = `https://spotidown-project.onrender.com${data.download_url}`;
+        link.href = data.download_url.startsWith('http') 
+            ? data.download_url 
+            : `${API_BASE_URL}${data.download_url}`;
         link.download = '';
         document.body.appendChild(link);
         link.click();
@@ -288,25 +297,27 @@ export default function App() {
 
                         {/* Actions */}
                         {result.type === 'track' ? (
+                            // NÚT TẢI SINGLE TRACK - ĐÃ ĐƯỢC NÂNG CẤP UI VỚI LOADING
                             <button 
                                 onClick={() => downloadTrack(url, result.id)}
-                                disabled={trackStatuses[result.id] === 'loading'}
+                                disabled={trackStatuses[result.id] === 'loading' || trackStatuses[result.id] === 'success'}
                                 className={`w-full font-bold py-4 rounded-xl transition-all flex items-center justify-center gap-2
-                                  ${trackStatuses[result.id] === 'loading' 
-                                    ? 'bg-white/10 text-white cursor-wait' 
-                                    : trackStatuses[result.id] === 'success'
-                                      ? 'bg-green-500/20 text-green-500 cursor-default'
-                                      : 'bg-green-500 hover:bg-green-400 text-black hover:scale-[1.02] hover:shadow-lg hover:shadow-green-500/20'
-                                  }`}
+                                    ${trackStatuses[result.id] === 'loading' 
+                                        ? 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20 cursor-wait' 
+                                        : trackStatuses[result.id] === 'success'
+                                            ? 'bg-green-500/10 text-green-500 border border-green-500/20 cursor-default'
+                                            : 'bg-green-500 hover:bg-green-400 text-black shadow-lg hover:shadow-green-500/20 hover:scale-[1.02]'
+                                    }`}
                             >
                                 {trackStatuses[result.id] === 'loading' && <Loader2 className="w-5 h-5 animate-spin" />}
                                 {trackStatuses[result.id] === 'success' && <CheckCircle2 className="w-5 h-5" />}
                                 {!trackStatuses[result.id] && <Download className="w-5 h-5" />}
                                 
-                                {trackStatuses[result.id] === 'loading' ? 'Đang tải xuống...' : 
+                                {trackStatuses[result.id] === 'loading' ? 'Đang xử lý...' : 
                                  trackStatuses[result.id] === 'success' ? 'Đã tải xong' : 'Tải Ngay'}
                             </button>
                         ) : (
+                            // NÚT TẢI PLAYLIST (Giữ nguyên)
                             <div className="w-full space-y-3">
                                 <div className="grid grid-cols-2 gap-3 mb-4">
                                     <div className="bg-white/5 rounded-xl p-3 border border-white/5 flex flex-col items-center">
