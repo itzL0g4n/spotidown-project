@@ -12,6 +12,7 @@ import shutil
 import zipfile
 import time
 import threading
+import random
 
 app = Flask(__name__)
 CORS(app)
@@ -46,7 +47,6 @@ CHECK_INTERVAL = 600
 def auto_cleanup_task():
     while True:
         try:
-            # print("🧹 Đang quét dọn file rác...") 
             now = time.time()
             count = 0
             for filename in os.listdir(DOWNLOAD_FOLDER):
@@ -149,19 +149,34 @@ def get_spotify_info(url):
         return None
 
 def download_from_youtube(query, output_path):
+    # Cấu hình tối ưu để tránh lỗi 403 và 0.00B/s trên Render
     ydl_opts = {
-        'format': 'bestaudio/best',
+        'format': 'bestaudio/best', # Ưu tiên audio tốt nhất
         'outtmpl': output_path + '.%(ext)s',
         'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '320'}],
         'noplaylist': True,
-        'quiet': True,
+        'quiet': False, 
         'nocheckcertificate': True,
-        # Nếu có cookies thì dùng
+        
+        # Mạng & Kết nối (Tăng timeout để đợi qua cơn nghẽn)
+        'socket_timeout': 30,    
+        'retries': 20,           
+        'fragment_retries': 20,
+        
+        # Cookies
         'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
-        # Giả lập User Agent giống trình duyệt thật
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        # XÓA BỎ extractor_args ép buộc client ios/android đi
+        
+        # QUAN TRỌNG: Dùng Client iOS để tránh bị bóp băng thông
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['ios'],
+            }
+        }
     }
+    
+    # Random sleep nhẹ
+    time.sleep(random.uniform(0.5, 2.0))
+    
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
             ydl.download([f"ytsearch:{query}"])
@@ -202,7 +217,7 @@ def api_download_track():
         os.rename(file_path, final_path)
         return jsonify({'status': 'success', 'download_url': f"/api/file/{final_filename}"})
     else:
-        return jsonify({'error': 'Không thể tải bài hát này do bản quyền hoặc lỗi chặn bot.'}), 500
+        return jsonify({'error': 'Server đang quá tải hoặc bị chặn. Vui lòng thử lại sau vài phút.'}), 500
 
 @app.route('/api/download_zip', methods=['POST'])
 def api_download_zip():
