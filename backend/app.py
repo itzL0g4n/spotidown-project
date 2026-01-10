@@ -46,7 +46,7 @@ CHECK_INTERVAL = 600
 def auto_cleanup_task():
     while True:
         try:
-            print("🧹 Đang quét dọn file rác...")
+            # print("🧹 Đang quét dọn file rác...") # Tắt log cho đỡ rối
             now = time.time()
             count = 0
             for filename in os.listdir(DOWNLOAD_FOLDER):
@@ -105,7 +105,6 @@ def get_spotify_info(url):
         elif 'playlist' in url:
             playlist = sp.playlist(url)
             tracks = []
-            # Tăng giới hạn lấy bài hát nếu cần
             for item in playlist['tracks']['items']:
                 track = item['track']
                 if track:
@@ -157,12 +156,14 @@ def download_from_youtube(query, output_path):
         'noplaylist': True,
         'quiet': True,
         'nocheckcertificate': True,
-        # Nếu có file cookies.txt thì dùng, không thì thôi
+        # Nếu có cookies thì dùng
         'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
+        # Giả lập User Agent
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        # Thay đổi chiến thuật: Dùng iOS client để tránh bị chặn 403 tốt hơn
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'web'],
-                'skip': ['dash', 'hls']
+                'player_client': ['ios', 'web'], 
             }
         }
     }
@@ -189,8 +190,6 @@ def api_download_track():
     if not info or info['type'] != 'track':
         return jsonify({'error': 'Lỗi thông tin bài hát'}), 400
     
-    # Check if download limit reached or handle concurrent requests (Optional)
-    
     search_query = f"{info['name']} - {info['artist']} audio"
     safe_name = sanitize_filename(f"{info['name']} - {info['artist']}")
     final_filename = f"{safe_name}.mp3"
@@ -208,7 +207,7 @@ def api_download_track():
         os.rename(file_path, final_path)
         return jsonify({'status': 'success', 'download_url': f"/api/file/{final_filename}"})
     else:
-        return jsonify({'error': 'Lỗi tải từ Youtube (Có thể do Cookies)'}), 500
+        return jsonify({'error': 'Không thể tải bài hát này do bản quyền hoặc lỗi chặn bot.'}), 500
 
 @app.route('/api/download_zip', methods=['POST'])
 def api_download_zip():
@@ -220,7 +219,7 @@ def api_download_zip():
     folder_path = os.path.join(DOWNLOAD_FOLDER, folder_name)
     if not os.path.exists(folder_path): os.makedirs(folder_path)
 
-    # Tải 10 bài đầu tiên (để demo), bỏ [:10] để tải hết
+    # Lấy 10 bài đầu để demo
     tracks_to_download = info['tracks'][:10] 
 
     for track in tracks_to_download:
