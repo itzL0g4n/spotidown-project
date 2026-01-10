@@ -25,21 +25,6 @@ DOWNLOAD_FOLDER = 'downloads'
 if not os.path.exists(DOWNLOAD_FOLDER):
     os.makedirs(DOWNLOAD_FOLDER)
 
-# --- XỬ LÝ COOKIES AN TOÀN ---
-def setup_cookies():
-    """Tạo file cookies.txt từ biến môi trường (Environment Variable)"""
-    cookie_content = os.environ.get('YOUTUBE_COOKIES')
-    if cookie_content:
-        # Ghi nội dung cookie ra file để yt-dlp sử dụng
-        with open('cookies.txt', 'w') as f:
-            f.write(cookie_content)
-        print("✅ Đã thiết lập Cookies thành công từ biến môi trường.")
-    else:
-        print("⚠️ Cảnh báo: Không tìm thấy biến YOUTUBE_COOKIES. Có thể gặp lỗi chặn bot.")
-
-# Gọi hàm thiết lập ngay khi khởi động
-setup_cookies()
-
 # --- TIẾN TRÌNH DỌN DẸP ---
 DELETE_AFTER_SECONDS = 1800 
 CHECK_INTERVAL = 600
@@ -58,9 +43,9 @@ def auto_cleanup_task():
                         if os.path.isfile(file_path): os.remove(file_path)
                         elif os.path.isdir(file_path): shutil.rmtree(file_path)
                         count += 1
-            if count > 0: print(f"✨ Đã dọn {count} file cũ.")
+            if count > 0: print(f"✨ Đã dọn {count} file cũ.", flush=True)
         except Exception as e:
-            print(f"⚠️ Lỗi dọn dẹp: {e}")
+            print(f"⚠️ Lỗi dọn dẹp: {e}", flush=True)
         time.sleep(CHECK_INTERVAL)
 
 cleanup_thread = threading.Thread(target=auto_cleanup_task, daemon=True)
@@ -71,7 +56,7 @@ try:
     auth_manager = SpotifyClientCredentials(client_id=SPOTIPY_CLIENT_ID, client_secret=SPOTIPY_CLIENT_SECRET)
     sp = spotipy.Spotify(auth_manager=auth_manager)
 except Exception as e:
-    print(f"Lỗi khởi tạo Spotify: {e}")
+    print(f"Lỗi khởi tạo Spotify: {e}", flush=True)
 
 def sanitize_filename(name):
     return re.sub(r'[<>:"/\\|?*]', '', name)
@@ -87,8 +72,9 @@ def add_metadata(file_path, metadata):
             img_data = requests.get(metadata['cover']).content
             audio.tags.add(APIC(encoding=3, mime='image/jpeg', type=3, desc=u'Cover', data=img_data))
         audio.save()
+        print(f"🏷️ Đã gắn metadata cho: {metadata['name']}", flush=True)
     except Exception as e:
-        print(f"⚠️ Lỗi gắn metadata: {e}")
+        print(f"⚠️ Lỗi gắn metadata: {e}", flush=True)
 
 def get_spotify_info(url):
     try:
@@ -145,50 +131,42 @@ def get_spotify_info(url):
                 'tracks': tracks
             }
     except Exception as e:
-        print(f"Lỗi Spotify: {e}")
+        print(f"Lỗi Spotify: {e}", flush=True)
         return None
 
-def download_from_youtube(query, output_path):
-    # Cấu hình tối ưu để tránh lỗi 403 và 0.00B/s trên Render
+def download_audio_source(query, output_path):
+    print(f"🔍 Đang tìm trên SoundCloud: {query}", flush=True)
+    
+    # Cấu hình yt-dlp cho SoundCloud (Đơn giản hơn nhiều so với YouTube)
     ydl_opts = {
-        'format': 'bestaudio/best', # Ưu tiên audio tốt nhất
+        'format': 'bestaudio/best',
         'outtmpl': output_path + '.%(ext)s',
         'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '320'}],
         'noplaylist': True,
         'quiet': False, 
-        'nocheckcertificate': True,
+        'verbose': True, # Bật log để xem chi tiết
         
-        # Mạng & Kết nối (Tăng timeout để đợi qua cơn nghẽn)
+        # SoundCloud không cần cookies phức tạp hay giả lập client
         'socket_timeout': 30,    
-        'retries': 20,           
-        'fragment_retries': 20,
-        
-        # Cookies
-        'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
-        
-        # QUAN TRỌNG: Dùng Client iOS để tránh bị bóp băng thông
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['ios'],
-            }
-        }
+        'retries': 10,           
     }
-    
-    # Random sleep nhẹ
-    time.sleep(random.uniform(0.5, 2.0))
     
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
-            ydl.download([f"ytsearch:{query}"])
+            # scsearch = SoundCloud Search
+            # Thêm "original" để cố gắng tìm bản gốc
+            ydl.download([f"scsearch:{query}"])
+            print(f"✅ Tải thành công: {output_path}.mp3", flush=True)
             return f"{output_path}.mp3"
         except Exception as e:
-            print(f"Lỗi Youtube DL: {e}")
+            print(f"❌ Lỗi SoundCloud DL cho {query}: {e}", flush=True)
             return None
 
 # --- API ---
 @app.route('/api/info', methods=['POST'])
 def api_info():
     data = request.json
+    print(f"📡 Nhận yêu cầu Info cho URL: {data.get('url')}", flush=True)
     info = get_spotify_info(data.get('url'))
     if not info: return jsonify({'error': 'Lỗi lấy thông tin Spotify'}), 400
     return jsonify(info)
@@ -196,20 +174,23 @@ def api_info():
 @app.route('/api/download_track', methods=['POST'])
 def api_download_track():
     data = request.json
+    print(f"⬇️ Nhận yêu cầu tải Track: {data.get('url')}", flush=True)
     info = get_spotify_info(data.get('url'))
     if not info or info['type'] != 'track':
         return jsonify({'error': 'Lỗi thông tin bài hát'}), 400
     
-    search_query = f"{info['name']} - {info['artist']} audio"
+    # Thêm "original" hoặc "audio" để tăng độ chính xác trên SoundCloud
+    search_query = f"{info['name']} - {info['artist']}"
     safe_name = sanitize_filename(f"{info['name']} - {info['artist']}")
     final_filename = f"{safe_name}.mp3"
     final_path = os.path.join(DOWNLOAD_FOLDER, final_filename)
     
     if os.path.exists(final_path):
+         print(f"📂 File đã tồn tại: {final_filename}", flush=True)
          return jsonify({'status': 'success', 'download_url': f"/api/file/{final_filename}"})
 
     temp_path = os.path.join(DOWNLOAD_FOLDER, info['id'])
-    file_path = download_from_youtube(search_query, temp_path)
+    file_path = download_audio_source(search_query, temp_path)
     
     if file_path:
         add_metadata(file_path, info)
@@ -217,11 +198,12 @@ def api_download_track():
         os.rename(file_path, final_path)
         return jsonify({'status': 'success', 'download_url': f"/api/file/{final_filename}"})
     else:
-        return jsonify({'error': 'Server đang quá tải hoặc bị chặn. Vui lòng thử lại sau vài phút.'}), 500
+        return jsonify({'error': 'Không tìm thấy bài hát trên nguồn nhạc.'}), 500
 
 @app.route('/api/download_zip', methods=['POST'])
 def api_download_zip():
     data = request.json
+    print(f"📦 Nhận yêu cầu tải ZIP cho URL: {data.get('url')}", flush=True)
     info = get_spotify_info(data.get('url'))
     if not info: return jsonify({'error': 'Lỗi lấy thông tin'}), 400
 
@@ -229,20 +211,31 @@ def api_download_zip():
     folder_path = os.path.join(DOWNLOAD_FOLDER, folder_name)
     if not os.path.exists(folder_path): os.makedirs(folder_path)
 
-    # Lấy 10 bài đầu để demo
+    # Lấy 10 bài đầu để demo (bỏ [:10] để tải hết)
     tracks_to_download = info['tracks'][:10] 
+    download_count = 0
 
     for track in tracks_to_download:
         safe_name = sanitize_filename(f"{track['name']} - {track['artist']}")
         final_filename = f"{safe_name}.mp3"
         final_file_path = os.path.join(folder_path, final_filename)
+        
         if not os.path.exists(final_file_path):
-            search_query = f"{track['name']} - {track['artist']} audio"
+            search_query = f"{track['name']} - {track['artist']}"
             temp_dl_path = os.path.join(folder_path, track['id'])
-            downloaded_path = download_from_youtube(search_query, temp_dl_path)
+            downloaded_path = download_audio_source(search_query, temp_dl_path)
             if downloaded_path:
                 add_metadata(downloaded_path, track)
                 os.rename(downloaded_path, final_file_path)
+                download_count += 1
+        else:
+            download_count += 1 
+
+    if download_count == 0:
+        print("❌ Không tải được bài nào. Hủy tạo Zip.", flush=True)
+        try: shutil.rmtree(folder_path)
+        except: pass
+        return jsonify({'error': 'Không thể tải bất kỳ bài hát nào từ danh sách này.'}), 500
     
     zip_filename = f"{folder_name}.zip"
     zip_path = os.path.join(DOWNLOAD_FOLDER, zip_filename)
@@ -251,10 +244,12 @@ def api_download_zip():
     try: shutil.rmtree(folder_path)
     except: pass
 
+    print(f"✅ Đã tạo Zip thành công: {zip_filename}", flush=True)
     return jsonify({'status': 'success', 'download_url': f"/api/file/{zip_filename}"})
 
 @app.route('/api/file/<path:filename>', methods=['GET'])
 def get_file(filename):
+    print(f"📥 Người dùng đang tải file: {filename}", flush=True)
     return send_file(os.path.join(DOWNLOAD_FOLDER, filename), as_attachment=True)
 
 if __name__ == '__main__':
