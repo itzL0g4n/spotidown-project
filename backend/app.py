@@ -5,6 +5,7 @@ import logging
 import zipfile
 import shutil
 import time
+import uuid  # Import thêm uuid để tạo folder tạm duy nhất
 from flask import Flask, request, jsonify, send_file, after_this_request
 from flask_cors import CORS
 from mutagen.easyid3 import EasyID3
@@ -41,13 +42,7 @@ except Exception as e:
 def sanitize_filename(name):
     return re.sub(r'[\\/*?:"<>|]', "", name)
 
-def find_downloaded_file(directory, video_id):
-    if not os.path.exists(directory): return None
-    time.sleep(1) 
-    for filename in os.listdir(directory):
-        if video_id in filename and filename.lower().endswith(('.mp3', '.m4a', '.webm')):
-            return os.path.join(directory, filename)
-    return None
+# Hàm tìm file cũ đã bị loại bỏ vì chiến thuật mới dùng folder tạm
 
 def get_spotify_info(url):
     """Lấy thông tin từ Spotify API"""
@@ -137,62 +132,86 @@ def get_video_info(url):
         return None
 
 def download_single_item(search_query, output_folder, metadata=None):
-    """Hàm phụ trợ: Tải 1 bài từ câu lệnh search"""
+    """Hàm phụ trợ: Tải 1 bài dùng folder tạm cô lập"""
+    
+    # Tạo folder tạm duy nhất cho lần tải này
+    temp_dir_name = str(uuid.uuid4())
+    temp_path = os.path.join(output_folder, temp_dir_name)
+    if not os.path.exists(temp_path):
+        os.makedirs(temp_path)
+
+    logging.info(f"🔍 Đang tìm kiếm và tải: {search_query}")
+    logging.info(f"📂 Thư mục tạm: {temp_path}")
+
     ydl_opts = {
         'format': 'bestaudio/best',
-        'outtmpl': os.path.join(output_folder, '%(id)s.%(ext)s'),
+        # Lưu thẳng vào folder tạm, không quan trọng tên file gốc là gì
+        'outtmpl': os.path.join(temp_path, '%(title)s.%(ext)s'),
         'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
         'quiet': True,
         'no_warnings': True,
-        'default_search': 'scsearch1', # CHUYỂN SANG SOUNDCLOUD SEARCH
+        'default_search': 'scsearch1', # SOUNDCLOUD SEARCH
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             # Search và tải
-            info = ydl.extract_info(search_query, download=True)
+            ydl.download([search_query])
             
-            # search trả về list entries, lấy phần tử đầu tiên
-            if 'entries' in info:
-                info = info['entries'][0]
+            # Kiểm tra xem folder tạm có file nào không
+            files = os.listdir(temp_path)
+            downloaded_file = None
+            for f in files:
+                if f.endswith('.mp3'):
+                    downloaded_file = os.path.join(temp_path, f)
+                    break
             
-            video_id = info['id']
-            file_path = find_downloaded_file(output_folder, video_id)
-
-            if file_path:
-                # Nếu có metadata từ Spotify truyền vào thì dùng, không thì dùng của nguồn tải
-                title = metadata['name'] if metadata else info.get('title', 'audio')
-                artist = metadata['artist'] if metadata else info.get('uploader', 'Unknown')
+            if downloaded_file:
+                # Nếu có metadata từ Spotify truyền vào thì dùng
+                title = metadata['name'] if metadata else "Unknown Title"
+                artist = metadata['artist'] if metadata else "Unknown Artist"
                 
                 safe_title = sanitize_filename(title)
-                new_path = os.path.join(output_folder, f"{safe_title}.mp3")
+                final_path = os.path.join(output_folder, f"{safe_title}.mp3")
                 
-                # Xử lý trùng tên
+                # Xử lý trùng tên ở thư mục đích
                 counter = 1
-                while os.path.exists(new_path) and new_path != file_path:
-                     new_path = os.path.join(output_folder, f"{safe_title} ({counter}).mp3")
+                while os.path.exists(final_path):
+                     final_path = os.path.join(output_folder, f"{safe_title} ({counter}).mp3")
                      counter += 1
 
-                if file_path != new_path:
-                    os.rename(file_path, new_path)
+                # Di chuyển file từ temp ra đích
+                shutil.move(downloaded_file, final_path)
+                logging.info(f"✅ Đã chuyển file tới: {final_path}")
                 
+                # Xóa folder tạm
+                try: shutil.rmtree(temp_path)
+                except: pass
+
                 # Gắn Metadata
                 try:
-                    audio = EasyID3(new_path)
+                    audio = EasyID3(final_path)
                     audio['title'] = title
                     audio['artist'] = artist
                     audio.save()
                 except: 
-                    # Fallback ID3
                     try: 
-                        audio = ID3(new_path) 
+                        audio = ID3(final_path) 
                         audio.save() 
                     except: pass
                 
-                return new_path, safe_title
-            return None, None
+                return final_path, safe_title
+            
+            else:
+                logging.error("❌ yt-dlp chạy xong nhưng không thấy file mp3 nào trong folder tạm.")
+                try: shutil.rmtree(temp_path)
+                except: pass
+                return None, None
+
     except Exception as e:
-        logging.error(f"Lỗi tải item {search_query}: {e}")
+        logging.error(f"❌ Lỗi nghiêm trọng khi tải {search_query}: {e}")
+        try: shutil.rmtree(temp_path)
+        except: pass
         return None, None
 
 def download_audio_logic(url, output_folder=DOWNLOAD_FOLDER, is_playlist=False):
@@ -209,9 +228,7 @@ def download_audio_logic(url, output_folder=DOWNLOAD_FOLDER, is_playlist=False):
             final_folder = os.path.join(output_folder, album_name)
             if not os.path.exists(final_folder): os.makedirs(final_folder)
             
-            # Duyệt qua từng bài và tải
             for track in info['tracks']:
-                # Bỏ từ khóa 'audio' vì SoundCloud mặc định là audio
                 query = f"{track['name']} {track['artist']}" 
                 download_single_item(query, final_folder, metadata=track)
                 
@@ -220,17 +237,16 @@ def download_audio_logic(url, output_folder=DOWNLOAD_FOLDER, is_playlist=False):
         # Nếu là bài lẻ (Track)
         else:
             final_folder = output_folder
-            # Lấy track đầu tiên
             track = info['tracks'][0]
             query = f"{track['name']} {track['artist']}"
             return download_single_item(query, final_folder, metadata=track)
 
-    # 2. XỬ LÝ LINK TRỰC TIẾP (SoundCloud/YouTube/Khác)
+    # 2. XỬ LÝ LINK TRỰC TIẾP
     else:
-        # Nếu user đưa link trực tiếp thì vẫn tải bình thường
         if not is_playlist:
             return download_single_item(url, output_folder)
         else:
+            # Logic playlist cho link trực tiếp (ít dùng với Soundcloud search, chủ yếu cho Youtube link)
             try:
                 with yt_dlp.YoutubeDL({'quiet': True, 'extract_flat': True}) as ydl:
                     pre_info = ydl.extract_info(url, download=False)
@@ -241,7 +257,7 @@ def download_audio_logic(url, output_folder=DOWNLOAD_FOLDER, is_playlist=False):
 
                 ydl_opts = {
                     'format': 'bestaudio/best',
-                    'outtmpl': os.path.join(final_folder, '%(id)s.%(ext)s'),
+                    'outtmpl': os.path.join(final_folder, '%(title)s.%(ext)s'), # Dùng title thay vì ID
                     'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
                     'quiet': True, 'no_warnings': True
                 }
