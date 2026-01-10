@@ -46,7 +46,7 @@ export default function App() {
     setZipStatusText('');
 
     try {
-      const response = await fetch('http://localhost:5000/api/info', {
+      const response = await fetch('https://spotidown-project.onrender.com/api/info', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: url }),
@@ -71,7 +71,7 @@ export default function App() {
     setTrackStatuses(prev => ({ ...prev, [trackId]: 'loading' }));
 
     try {
-      const response = await fetch('http://localhost:5000/api/download_track', {
+      const response = await fetch('https://spotidown-project.onrender.com/api/download_track', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: trackUrl }),
@@ -82,7 +82,7 @@ export default function App() {
       if (response.ok) {
         setTrackStatuses(prev => ({ ...prev, [trackId]: 'success' }));
         const link = document.createElement('a');
-        link.href = `http://localhost:5000${data.download_url}`;
+        link.href = `https://spotidown-project.onrender.com${data.download_url}`;
         link.download = '';
         document.body.appendChild(link);
         link.click();
@@ -112,7 +112,7 @@ export default function App() {
     }, 4000); 
 
     try {
-      const response = await fetch('http://localhost:5000/api/download_zip', {
+      const response = await fetch('https://spotidown-project.onrender.com/api/download_zip', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: url }),
@@ -123,7 +123,7 @@ export default function App() {
       if (response.ok) {
         setZipStatusText('Hoàn tất! Đang tải file về máy...');
         const link = document.createElement('a');
-        link.href = `http://localhost:5000${data.download_url}`;
+        link.href = `https://spotidown-project.onrender.com${data.download_url}`;
         link.download = '';
         document.body.appendChild(link);
         link.click();
@@ -392,7 +392,7 @@ export default function App() {
       
       {/* Footer */}
       <footer className="text-center py-6 text-gray-600 text-xs relative z-10">
-        <p>© 2024 SpotiDown Pro. Educational Purposes Only.</p>
+        <p>© 2026 SpotiDown Pro. Educational Purposes Only.</p>
       </footer>
     </div>
   );
