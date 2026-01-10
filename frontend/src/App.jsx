@@ -290,9 +290,21 @@ export default function App() {
                         {result.type === 'track' ? (
                             <button 
                                 onClick={() => downloadTrack(url, result.id)}
-                                className="w-full bg-green-500 hover:bg-green-400 text-black font-bold py-4 rounded-xl transition-all hover:scale-[1.02] hover:shadow-lg hover:shadow-green-500/20 flex items-center justify-center gap-2"
+                                disabled={trackStatuses[result.id] === 'loading'}
+                                className={`w-full font-bold py-4 rounded-xl transition-all flex items-center justify-center gap-2
+                                  ${trackStatuses[result.id] === 'loading' 
+                                    ? 'bg-white/10 text-white cursor-wait' 
+                                    : trackStatuses[result.id] === 'success'
+                                      ? 'bg-green-500/20 text-green-500 cursor-default'
+                                      : 'bg-green-500 hover:bg-green-400 text-black hover:scale-[1.02] hover:shadow-lg hover:shadow-green-500/20'
+                                  }`}
                             >
-                                <Download className="w-5 h-5" /> Tải Ngay
+                                {trackStatuses[result.id] === 'loading' && <Loader2 className="w-5 h-5 animate-spin" />}
+                                {trackStatuses[result.id] === 'success' && <CheckCircle2 className="w-5 h-5" />}
+                                {!trackStatuses[result.id] && <Download className="w-5 h-5" />}
+                                
+                                {trackStatuses[result.id] === 'loading' ? 'Đang tải xuống...' : 
+                                 trackStatuses[result.id] === 'success' ? 'Đã tải xong' : 'Tải Ngay'}
                             </button>
                         ) : (
                             <div className="w-full space-y-3">
