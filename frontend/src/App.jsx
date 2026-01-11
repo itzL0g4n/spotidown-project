@@ -2,7 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { Download, Music, Search, Disc, CheckCircle2, AlertCircle, Sparkles, List, Play, FileArchive, Loader2, BarChart3, ChevronRight } from 'lucide-react';
 
 // --- CẤU HÌNH URL BACKEND (RUNTIME CHECK) ---
-// Tự động nhận diện môi trường dựa trên trình duyệt thay vì biến môi trường build
+// Tự động nhận diện môi trường:
+// - Nếu đang chạy localhost -> Dùng http://localhost:5000
+// - Nếu đang chạy trên Render (production) -> Dùng chính domain hiện tại (đường dẫn tương đối)
 const getApiBaseUrl = () => {
   if (typeof window !== 'undefined') {
     const hostname = window.location.hostname;
@@ -10,7 +12,6 @@ const getApiBaseUrl = () => {
       return 'http://localhost:5000';
     }
   }
-  // URL Production trên Render
   return 'https://spotidown-project.onrender.com';
 };
 
@@ -49,10 +50,10 @@ export default function App() {
         });
       }, 300);
 
-      // Nếu sau 5 giây vẫn chưa xong -> Server đang khởi động
+      // Nếu sau 8 giây vẫn chưa xong -> Server đang khởi động
       timeout = setTimeout(() => {
         setIsTakingLong(true);
-      }, 5000);
+      }, 8000);
 
     } else if (status === 'success' || status === 'error') {
       clearInterval(interval);
@@ -133,7 +134,7 @@ export default function App() {
     }
   };
 
-  // --- LOGIC TẢI ZIP BẤT ĐỒNG BỘ ---
+  // --- LOGIC TẢI ZIP BẤT ĐỒNG BỘ (ASYNC POLLING) ---
   const downloadZip = async () => {
     if (!result || isZipping) return;
     
@@ -142,6 +143,7 @@ export default function App() {
     setZipProgress(5);
     
     try {
+      // 1. Gửi yêu cầu bắt đầu
       const startRes = await fetch(`${API_BASE_URL}/api/start_zip`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -153,6 +155,7 @@ export default function App() {
       
       const taskId = startData.task_id;
       
+      // 2. Hỏi thăm server liên tục (Polling)
       const pollInterval = setInterval(async () => {
         try {
           const statusRes = await fetch(`${API_BASE_URL}/api/status_zip/${taskId}`);
@@ -236,7 +239,7 @@ export default function App() {
         <header className="flex flex-col items-center justify-center mb-12 pt-8">
            <div className="flex items-center gap-2 mb-4 px-4 py-1.5 rounded-full bg-white/5 border border-white/10 backdrop-blur-md shadow-lg shadow-green-500/5 hover:border-green-500/30 transition-colors cursor-default">
              <Sparkles className="w-3.5 h-3.5 text-yellow-400" />
-             <span className="text-[10px] font-bold text-gray-300 tracking-widest uppercase">Version 3.2 Stable</span>
+             <span className="text-[10px] font-bold text-gray-300 tracking-widest uppercase">Version 3.3 Fixed</span>
            </div>
            
            <div className="flex items-center gap-3">
@@ -293,7 +296,7 @@ export default function App() {
                       {isTakingLong && (
                         <div className="mt-2 text-yellow-300 text-xs bg-yellow-500/10 border border-yellow-500/20 p-2 rounded-lg animate-in fade-in">
                            <i className="fa-solid fa-mug-hot mr-2"></i>
-                           Server đang khởi động từ chế độ ngủ (Cold Start). Vui lòng đợi khoảng 1 phút...
+                           Server đang khởi động (Cold Start). Vui lòng đợi 30s-1ph...
                         </div>
                       )}
                    </div>
