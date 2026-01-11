@@ -1,21 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Download, Music, Search, Disc, CheckCircle2, AlertCircle, Sparkles, List, Play, FileArchive, Loader2, BarChart3, ChevronRight } from 'lucide-react';
 
-// --- CẤU HÌNH URL BACKEND (RUNTIME CHECK) ---
-// Tự động nhận diện môi trường:
-// - Nếu đang chạy localhost -> Dùng http://localhost:5000
-// - Nếu đang chạy trên Render (production) -> Dùng chính domain hiện tại (đường dẫn tương đối)
-const getApiBaseUrl = () => {
-  if (typeof window !== 'undefined') {
-    const hostname = window.location.hostname;
-    if (hostname === 'localhost' || hostname === '127.0.0.1') {
-      return 'http://localhost:5000';
-    }
-  }
-  return 'https://spotidown-project.onrender.com';
-};
-
-const API_BASE_URL = getApiBaseUrl();
+// --- CẤU HÌNH ĐƠN GIẢN (HARDCODED) ---
+// Chạy trực tiếp trên Render, không kiểm tra môi trường loằng ngoằng nữa
+const API_BASE_URL = 'https://spotidown-project.onrender.com';
 
 export default function App() {
   const [url, setUrl] = useState('');
@@ -30,10 +18,10 @@ export default function App() {
   const [zipProgress, setZipProgress] = useState(0); 
   const [trackStatuses, setTrackStatuses] = useState({}); 
   
-  // Trạng thái chờ Cold Start
+  // Trạng thái chờ Cold Start (Server khởi động chậm)
   const [isTakingLong, setIsTakingLong] = useState(false);
 
-  // Giả lập loading bar & Phát hiện Cold Start
+  // Giả lập loading bar
   useEffect(() => {
     let interval;
     let timeout;
@@ -50,10 +38,10 @@ export default function App() {
         });
       }, 300);
 
-      // Nếu sau 8 giây vẫn chưa xong -> Server đang khởi động
+      // Nếu sau 5 giây chưa xong thì báo hiệu server đang khởi động
       timeout = setTimeout(() => {
         setIsTakingLong(true);
-      }, 8000);
+      }, 5000);
 
     } else if (status === 'success' || status === 'error') {
       clearInterval(interval);
@@ -84,6 +72,7 @@ export default function App() {
     setZipProgress(0);
 
     try {
+      // Gọi API lấy thông tin
       const response = await fetch(`${API_BASE_URL}/api/info`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -100,9 +89,10 @@ export default function App() {
         setMessage(data.error || 'Lỗi từ Server.');
       }
     } catch (error) {
-      console.error(error);
+      console.error("Fetch error:", error);
       setStatus('error');
-      setMessage('Không kết nối được Backend. (Có thể server đang ngủ hoặc sai URL)');
+      // Thông báo rõ ràng hơn nếu kết nối thất bại
+      setMessage('Không thể kết nối đến Server. Vui lòng thử lại sau giây lát (Server Render Free có thể đang ngủ).');
     }
   };
 
@@ -121,6 +111,7 @@ export default function App() {
       if (response.ok && data.status === 'success') {
         setTrackStatuses(prev => ({ ...prev, [trackId]: 'success' }));
         const link = document.createElement('a');
+        // Đảm bảo link tải về đầy đủ
         link.href = data.download_url.startsWith('http') ? data.download_url : `${API_BASE_URL}${data.download_url}`;
         link.download = '';
         document.body.appendChild(link);
@@ -155,7 +146,7 @@ export default function App() {
       
       const taskId = startData.task_id;
       
-      // 2. Hỏi thăm server liên tục (Polling)
+      // 2. Hỏi thăm server liên tục (Polling) mỗi 2 giây
       const pollInterval = setInterval(async () => {
         try {
           const statusRes = await fetch(`${API_BASE_URL}/api/status_zip/${taskId}`);
@@ -239,7 +230,7 @@ export default function App() {
         <header className="flex flex-col items-center justify-center mb-12 pt-8">
            <div className="flex items-center gap-2 mb-4 px-4 py-1.5 rounded-full bg-white/5 border border-white/10 backdrop-blur-md shadow-lg shadow-green-500/5 hover:border-green-500/30 transition-colors cursor-default">
              <Sparkles className="w-3.5 h-3.5 text-yellow-400" />
-             <span className="text-[10px] font-bold text-gray-300 tracking-widest uppercase">Version 3.3 Fixed</span>
+             <span className="text-[10px] font-bold text-gray-300 tracking-widest uppercase">Version 3.4 Stable</span>
            </div>
            
            <div className="flex items-center gap-3">
@@ -296,7 +287,7 @@ export default function App() {
                       {isTakingLong && (
                         <div className="mt-2 text-yellow-300 text-xs bg-yellow-500/10 border border-yellow-500/20 p-2 rounded-lg animate-in fade-in">
                            <i className="fa-solid fa-mug-hot mr-2"></i>
-                           Server đang khởi động (Cold Start). Vui lòng đợi 30s-1ph...
+                           Server Render Free đang khởi động (Cold Start). Vui lòng đợi 30s-1ph...
                         </div>
                       )}
                    </div>
