@@ -2,14 +2,16 @@ import os
 import re
 import shutil
 import logging
-import uuid  # Thêm thư viện UUID để tạo folder tạm duy nhất
+import uuid
+import time
+import threading
 import yt_dlp
 from flask import Flask, request, jsonify, send_file, after_this_request
 from flask_cors import CORS
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3
 
-# Import Spotify
+# Spotify
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
 
@@ -18,198 +20,153 @@ CORS(app)
 logging.basicConfig(level=logging.INFO)
 
 DOWNLOAD_FOLDER = 'downloads'
-if not os.path.exists(DOWNLOAD_FOLDER):
-    os.makedirs(DOWNLOAD_FOLDER)
+if not os.path.exists(DOWNLOAD_FOLDER): os.makedirs(DOWNLOAD_FOLDER)
 
-# Cấu hình Spotify
-SPOTIPY_CLIENT_ID = os.environ.get('SPOTIPY_CLIENT_ID', 'YOUR_SPOTIFY_CLIENT_ID')
-SPOTIPY_CLIENT_SECRET = os.environ.get('SPOTIPY_CLIENT_SECRET', 'YOUR_SPOTIFY_CLIENT_SECRET')
+# --- CẤU HÌNH SPOTIFY ---
+# Thay bằng Key của bạn nếu cần, hoặc để mặc định để test fallback (có thể bị giới hạn)
+SPOTIPY_CLIENT_ID = os.environ.get('SPOTIPY_CLIENT_ID', '835be40df95f4ceb9cd48db5ab553e1e')
+SPOTIPY_CLIENT_SECRET = os.environ.get('SPOTIPY_CLIENT_SECRET', '4ab634805b2a49dfa66550fccccaf7b4')
 
-if SPOTIPY_CLIENT_ID == 'YOUR_SPOTIFY_CLIENT_ID':
-    logging.warning("⚠️ Chưa cấu hình Spotify API Key!")
+try:
+    sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(client_id=SPOTIPY_CLIENT_ID, client_secret=SPOTIPY_CLIENT_SECRET))
+    logging.info("✅ Spotify: Connected")
+except:
     sp = None
-else:
-    auth_manager = SpotifyClientCredentials(client_id=SPOTIPY_CLIENT_ID, client_secret=SPOTIPY_CLIENT_SECRET)
-    sp = spotipy.Spotify(auth_manager=auth_manager)
-    logging.info("✅ Đã kết nối Spotify.")
+    logging.warning("⚠️ Spotify: Disconnected")
 
-def sanitize_filename(name):
-    return re.sub(r'[\\/*?:"<>|]', "", name).strip()
-
-def get_spotify_metadata(url):
-    if not sp: raise Exception("Thiếu Spotify API Key.")
-    try:
-        if 'track' in url:
-            item = sp.track(url)
-            return {
-                'type': 'track',
-                'name': item['name'],
-                'artist': ", ".join([a['name'] for a in item['artists']]),
-                'cover': item['album']['images'][0]['url'] if item['album']['images'] else '',
-                'tracks_list': [{'name': item['name'], 'artist': ", ".join([a['name'] for a in item['artists']])}]
-            }
-        elif 'playlist' in url:
-            pl = sp.playlist(url)
-            tracks = []
-            for item in pl['tracks']['items']:
-                if item.get('track'):
-                    t = item['track']
-                    tracks.append({'name': t['name'], 'artist': ", ".join([a['name'] for a in t['artists']])})
-            return {
-                'type': 'playlist', 
-                'name': pl['name'], 
-                'cover': pl['images'][0]['url'] if pl['images'] else '', # Lấy cover playlist
-                'tracks_list': tracks
-            }
-        elif 'album' in url:
-            al = sp.album(url)
-            tracks = [{'name': t['name'], 'artist': ", ".join([a['name'] for a in t['artists']])} for t in al['tracks']['items']]
-            return {
-                'type': 'album', 
-                'name': al['name'], 
-                'cover': al['images'][0]['url'] if al['images'] else '', # Lấy cover album
-                'tracks_list': tracks
-            }
-    except Exception as e:
-        raise Exception(f"Lỗi Spotify: {str(e)}")
-
-def dl_soundcloud(query, output_folder, final_filename, meta_title, meta_artist):
-    # Tạo folder tạm định danh (UUID) để cô lập quá trình tải
-    # Giúp tránh xung đột file và dễ dàng tìm file kết quả
-    task_id = str(uuid.uuid4())
-    temp_dir = os.path.join(output_folder, f"temp_{task_id}")
-    os.makedirs(temp_dir, exist_ok=True)
-    
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'), # Lưu vào temp dir
-        'default_search': 'scsearch1',
-        'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
-        'quiet': True,
-        'noplaylist': True,
-        'concurrent_fragment_downloads': 5, 
-    }
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([query])
-            
-        # Tìm file MP3 trong folder tạm (bất kể tên là gì)
-        files = [f for f in os.listdir(temp_dir) if f.endswith('.mp3')]
-        
-        if not files:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            return None
-
-        # Lấy file đầu tiên tìm thấy
-        source_file = os.path.join(temp_dir, files[0])
-
-        # Đổi tên file sang tên chuẩn
-        clean_name = sanitize_filename(final_filename)
-        final_path = os.path.join(output_folder, f"{clean_name}.mp3")
-        
-        cnt = 1
-        while os.path.exists(final_path):
-            final_path = os.path.join(output_folder, f"{clean_name} ({cnt}).mp3")
-            cnt += 1
-            
-        shutil.move(source_file, final_path)
-        shutil.rmtree(temp_dir, ignore_errors=True) # Dọn dẹp folder tạm
-
-        # Gắn thẻ metadata
+# --- DỌN DẸP ---
+def cleanup_task():
+    while True:
         try:
-            audio = EasyID3(final_path)
-            audio['title'] = meta_title
-            audio['artist'] = meta_artist
-            audio.save()
-        except: 
-            try: ID3(final_path).save() 
+            now = time.time()
+            for f in os.listdir(DOWNLOAD_FOLDER):
+                p = os.path.join(DOWNLOAD_FOLDER, f)
+                if os.path.isfile(p) and now - os.path.getctime(p) > 3600: os.remove(p) # 1h
+                elif os.path.isdir(p) and f.startswith("temp_"): shutil.rmtree(p, ignore_errors=True)
+        except: pass
+        time.sleep(600)
+threading.Thread(target=cleanup_task, daemon=True).start()
+
+def sanitize(n): return re.sub(r'[\\/*?:"<>|]', "", n).strip()
+
+def get_meta(url):
+    if not sp: raise Exception("No Spotify Key")
+    if 'track' in url:
+        t = sp.track(url)
+        art = ", ".join([a['name'] for a in t['artists']])
+        return {'type':'track', 'name':t['name'], 'artist':art, 'cover':t['album']['images'][0]['url'], 'tracks':[{'name':t['name'], 'artist':art}]}
+    elif 'playlist' in url:
+        p = sp.playlist(url)
+        return {'type':'playlist', 'name':p['name'], 'cover':p['images'][0]['url'], 'tracks':[{'name':i['track']['name'], 'artist':", ".join([a['name'] for a in i['track']['artists']])} for i in p['tracks']['items'] if i.get('track')]}
+    elif 'album' in url:
+        a = sp.album(url)
+        return {'type':'album', 'name':a['name'], 'cover':a['images'][0]['url'], 'tracks':[{'name':t['name'], 'artist':", ".join([ar['name'] for ar in t['artists']])} for t in a['tracks']['items']]}
+    raise Exception("Link không hỗ trợ")
+
+def dl_sc(query, final_name, title, artist):
+    """Tải từ SoundCloud dùng thư mục tạm UUID để đảm bảo 100% bắt được file"""
+    safe_name = sanitize(final_name)
+    final_path = os.path.join(DOWNLOAD_FOLDER, f"{safe_name}.mp3")
+    
+    # 1. Cache Hit
+    if os.path.exists(final_path): return final_path
+
+    # 2. Tạo folder tạm riêng biệt
+    temp_dir = os.path.join(DOWNLOAD_FOLDER, f"temp_{uuid.uuid4()}")
+    os.makedirs(temp_dir, exist_ok=True)
+
+    try:
+        opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'), # Tên gốc không quan trọng
+            'default_search': 'scsearch1', # SOUNDCLOUD ONLY
+            'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
+            'quiet': True, 'no_warnings': True, 'noplaylist': True,
+        }
+        
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            ydl.download([query])
+
+        # 3. Tìm file MP3 bất kỳ trong folder tạm
+        files = [f for f in os.listdir(temp_dir) if f.endswith('.mp3')]
+        if not files: return None
+        
+        # 4. Di chuyển và gắn thẻ
+        shutil.move(os.path.join(temp_dir, files[0]), final_path)
+        
+        try:
+            tag = EasyID3(final_path)
+            tag['title'] = title
+            tag['artist'] = artist
+            tag.save()
+        except:
+            try: ID3(final_path).save()
             except: pass
             
         return final_path
     except Exception as e:
-        logging.error(f"DL Error ({query}): {e}")
-        shutil.rmtree(temp_dir, ignore_errors=True) # Dọn dẹp nếu lỗi
+        logging.error(f"DL Fail: {e}")
         return None
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
-# --- ROUTES ---
-
+# --- API ---
 @app.route('/')
-def index():
-    return jsonify({"status": "Ready", "spotify": "OK" if sp else "Missing Key"})
+def idx(): return jsonify({"status":"SoundCloud Engine Ready"})
 
 @app.route('/api/info', methods=['POST'])
-def api_info():
-    url = request.json.get('url')
-    if not url: return jsonify({'error': 'No URL'}), 400
+def info():
     try:
-        data = get_spotify_metadata(url)
-        # SỬA LỖI: Thêm trường 'cover' và 'artist' vào response trả về
-        return jsonify({
-            'type': data['type'],
-            'name': data['name'],
-            'artist': data.get('artist', ''), # Thêm artist
-            'cover': data.get('cover', ''),   # Thêm cover
-            'tracks': [{'id': i, 'name': t['name'], 'artist': t['artist'], 'cover': data.get('cover')} 
-                       for i, t in enumerate(data['tracks_list'])]
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        d = get_meta(request.json.get('url'))
+        return jsonify(d)
+    except Exception as e: return jsonify({'error':str(e)}), 500
 
 @app.route('/api/download_track', methods=['POST'])
-def api_download_track():
-    url = request.json.get('url')
+def dl_track():
     try:
-        meta = get_spotify_metadata(url)
-        track = meta['tracks_list'][0]
-        query = f"{track['name']} {track['artist']}"
-        logging.info(f"Downloading: {query}")
+        url = request.json.get('url')
+        meta = get_meta(url)
+        t = meta['tracks'][0]
+        # Query không dùng chữ 'audio' với SC để chính xác hơn
+        path = dl_sc(f"{t['name']} {t['artist']}", f"{t['name']} - {t['artist']}", t['name'], t['artist'])
         
-        path = dl_soundcloud(query, DOWNLOAD_FOLDER, track['name'], track['name'], track['artist'])
-        
-        if not path: return jsonify({'error': 'Failed to download from SoundCloud'}), 500
-
-        @after_this_request
-        def cleanup(resp):
-            try: os.remove(path)
-            except: pass
-            return resp
-
+        if not path: return jsonify({'error':'Không tìm thấy trên SoundCloud'}), 404
         return send_file(path, as_attachment=True, download_name=os.path.basename(path))
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    except Exception as e: return jsonify({'error':str(e)}), 500
 
 @app.route('/api/download_zip', methods=['POST'])
-def api_download_zip():
-    url = request.json.get('url')
+def dl_zip():
     try:
-        meta = get_spotify_metadata(url)
-        album_name = sanitize_filename(meta['name'])
-        album_dir = os.path.join(DOWNLOAD_FOLDER, album_name)
-        if not os.path.exists(album_dir): os.makedirs(album_dir)
+        url = request.json.get('url')
+        meta = get_meta(url)
+        aname = sanitize(meta['name'])
         
-        count = 0
-        for t in meta['tracks_list']:
-            query = f"{t['name']} {t['artist']}"
-            if dl_soundcloud(query, album_dir, t['name'], t['name'], t['artist']):
-                count += 1
-        
-        if count == 0: return jsonify({'error': 'No tracks downloaded'}), 500
+        # Folder tạm để gom file zip
+        zip_temp = os.path.join(DOWNLOAD_FOLDER, f"zip_{uuid.uuid4()}")
+        os.makedirs(zip_temp, exist_ok=True)
 
-        zip_name = f"{album_name}.zip"
-        zip_path = os.path.join(DOWNLOAD_FOLDER, zip_name)
-        shutil.make_archive(zip_path.replace('.zip', ''), 'zip', album_dir)
-        shutil.rmtree(album_dir, ignore_errors=True)
+        cnt = 0
+        for t in meta['tracks']:
+            p = dl_sc(f"{t['name']} {t['artist']}", f"{t['name']} - {t['artist']}", t['name'], t['artist'])
+            if p:
+                shutil.copy(p, os.path.join(zip_temp, os.path.basename(p)))
+                cnt += 1
+        
+        if cnt == 0: 
+            shutil.rmtree(zip_temp)
+            return jsonify({'error':'Empty Playlist'}), 404
+
+        zpath = os.path.join(DOWNLOAD_FOLDER, f"{aname}.zip")
+        shutil.make_archive(zpath.replace('.zip',''), 'zip', zip_temp)
+        shutil.rmtree(zip_temp)
 
         @after_this_request
-        def cleanup(resp):
-            try: os.remove(zip_path)
+        def cl(r): 
+            try: os.remove(zpath)
             except: pass
-            return resp
+            return r
+            
+        return send_file(zpath, as_attachment=True, download_name=f"{aname}.zip")
+    except Exception as e: return jsonify({'error':str(e)}), 500
 
-        return send_file(zip_path, as_attachment=True, download_name=zip_name)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+if __name__ == '__main__': app.run(host='0.0.0.0', port=5000, debug=True)
