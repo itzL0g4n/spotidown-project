@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Music, Search, Disc, CheckCircle2, AlertCircle, Sparkles, List, FileArchive, Loader2 } from 'lucide-react';
+import { Download, Music, Search, Disc, CheckCircle2, AlertCircle, Sparkles, List, Play, FileArchive, Loader2, BarChart3, ChevronRight } from 'lucide-react';
 
-// Cấu hình URL Backend (Thay đổi nếu URL Render của bạn khác)
+// URL Backend (Đảm bảo đúng link Render của bạn)
 const API_BASE_URL = 'https://spotidown-project.onrender.com';
 
 export default function App() {
@@ -11,12 +11,13 @@ export default function App() {
   const [result, setResult] = useState(null);
   const [message, setMessage] = useState('');
   
-  // Trạng thái zipping
+  // Trạng thái zipping (Async)
   const [isZipping, setIsZipping] = useState(false);
   const [zipStatusText, setZipStatusText] = useState(''); 
+  const [zipProgress, setZipProgress] = useState(0); // % tiến độ zip
   const [trackStatuses, setTrackStatuses] = useState({}); 
 
-  // Giả lập loading bar cho UI
+  // Loading bar giả lập cho lúc tìm kiếm
   useEffect(() => {
     let interval;
     if (status === 'processing') {
@@ -47,6 +48,7 @@ export default function App() {
     setTrackStatuses({});
     setIsZipping(false);
     setZipStatusText('');
+    setZipProgress(0);
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/info`, {
@@ -84,7 +86,6 @@ export default function App() {
 
       if (response.ok && data.status === 'success') {
         setTrackStatuses(prev => ({ ...prev, [trackId]: 'success' }));
-        // Tạo thẻ a ảo để tải file
         const link = document.createElement('a');
         link.href = `${API_BASE_URL}${data.download_url}`;
         link.download = '';
@@ -99,15 +100,17 @@ export default function App() {
     }
   };
 
-  // --- LOGIC TẢI ZIP (POLLING) ---
+  // --- LOGIC TẢI ZIP BẤT ĐỒNG BỘ (ASYNC POLLING) ---
+  // Đây là chìa khóa để tải album lớn mà không bị timeout
   const downloadZip = async () => {
     if (!result || isZipping) return;
     
     setIsZipping(true);
-    setZipStatusText('Đang khởi tạo task trên server...');
+    setZipStatusText('Đang khởi tạo phiên làm việc...');
+    setZipProgress(5);
     
     try {
-      // 1. Gửi yêu cầu bắt đầu
+      // 1. Gửi yêu cầu bắt đầu -> Nhận Task ID
       const startRes = await fetch(`${API_BASE_URL}/api/start_zip`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -115,23 +118,27 @@ export default function App() {
       });
       
       const startData = await startRes.json();
-      if (!startRes.ok) throw new Error(startData.error);
+      if (!startRes.ok) throw new Error(startData.error || 'Lỗi khởi tạo');
       
       const taskId = startData.task_id;
       
-      // 2. Polling trạng thái mỗi 2 giây
+      // 2. Hỏi thăm server liên tục (Polling)
       const pollInterval = setInterval(async () => {
         try {
           const statusRes = await fetch(`${API_BASE_URL}/api/status_zip/${taskId}`);
           const statusData = await statusRes.json();
           
-          if (statusData.status === 'processing') {
-             setZipStatusText(`${statusData.progress} (${statusData.percent}%)`);
+          if (statusData.status === 'processing' || statusData.status === 'queued') {
+             // Cập nhật trạng thái cho người dùng thấy
+             setZipStatusText(statusData.progress || 'Đang xử lý...');
+             setZipProgress(statusData.percent || 10);
+             
           } else if (statusData.status === 'completed') {
+             // Hoàn tất -> Tải file
              clearInterval(pollInterval);
              setZipStatusText('Hoàn tất! Đang tải file về...');
+             setZipProgress(100);
              
-             // Kích hoạt tải
              const link = document.createElement('a');
              link.href = `${API_BASE_URL}${statusData.download_url}`;
              link.download = '';
@@ -139,17 +146,22 @@ export default function App() {
              link.click();
              document.body.removeChild(link);
              
-             setIsZipping(false);
+             // Reset sau 3 giây
+             setTimeout(() => {
+                 setIsZipping(false);
+                 setZipStatusText('');
+             }, 3000);
+
           } else if (statusData.status === 'error') {
              clearInterval(pollInterval);
              setZipStatusText(`Lỗi: ${statusData.error}`);
              setIsZipping(false);
+             alert(`Lỗi tải xuống: ${statusData.error}`);
           }
         } catch (err) {
-          console.error(err);
-          // Không clear interval ngay để thử lại nếu lỗi mạng tạm thời
+          console.error("Polling error:", err);
         }
-      }, 2000);
+      }, 2000); // Hỏi mỗi 2 giây
 
     } catch (e) {
       setZipStatusText(`Lỗi kết nối: ${e.message}`);
@@ -165,6 +177,7 @@ export default function App() {
     setTrackStatuses({});
     setIsZipping(false);
     setZipStatusText('');
+    setZipProgress(0);
   }
 
   // Visualizer bars component
@@ -189,13 +202,14 @@ export default function App() {
           <div className="absolute bottom-[-10%] left-[20%] w-[600px] h-[600px] bg-emerald-500/5 rounded-full blur-[100px]"></div>
       </div>
 
+      {/* Main Content */}
       <div className="container mx-auto px-4 py-8 relative z-10 flex-1 flex flex-col">
         
         {/* Header */}
         <header className="flex flex-col items-center justify-center mb-12 pt-8">
            <div className="flex items-center gap-2 mb-4 px-4 py-1.5 rounded-full bg-white/5 border border-white/10 backdrop-blur-md shadow-lg shadow-green-500/5 hover:border-green-500/30 transition-colors cursor-default">
              <Sparkles className="w-3.5 h-3.5 text-yellow-400" />
-             <span className="text-[10px] font-bold text-gray-300 tracking-widest uppercase">Version 3.0 Async</span>
+             <span className="text-[10px] font-bold text-gray-300 tracking-widest uppercase">Version 3.1 Stable</span>
            </div>
            
            <div className="flex items-center gap-3">
@@ -234,7 +248,7 @@ export default function App() {
                       disabled={!url || status === 'processing'}
                       className="m-2 h-12 w-12 md:h-14 md:w-14 bg-white text-black rounded-2xl flex items-center justify-center hover:bg-green-400 transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-white/5"
                     >
-                      {status === 'processing' ? <Loader2 className="w-6 h-6 animate-spin" /> : <Search className="w-7 h-7" />}
+                      {status === 'processing' ? <Loader2 className="w-6 h-6 animate-spin" /> : <ChevronRight className="w-7 h-7" />}
                     </button>
                   </div>
                </div>
@@ -268,7 +282,8 @@ export default function App() {
         {status === 'success' && result && (
           <div className="w-full max-w-7xl mx-auto animate-in fade-in slide-in-from-bottom-12 duration-700">
              
-             <button onClick={handleReset} className="mb-6 text-gray-500 hover:text-white flex items-center gap-2 transition-colors text-sm font-medium">
+             <button onClick={handleReset} className="mb-6 text-gray-500 hover:text-white flex items-center gap-2 transition-colors group text-sm font-medium">
+                <div className="p-1 rounded-full bg-white/5 group-hover:bg-white/10"><ChevronRight className="w-4 h-4 rotate-180" /></div>
                 Quay lại tìm kiếm
              </button>
 
@@ -306,9 +321,17 @@ export default function App() {
                                     {isZipping ? "Đang xử lý..." : "Tải trọn bộ (.zip)"}
                                 </button>
                                 
-                                {zipStatusText && (
-                                    <div className="p-3 bg-yellow-500/5 border border-yellow-500/10 rounded-lg text-xs text-yellow-200 text-center animate-pulse">
-                                        {zipStatusText}
+                                {isZipping && (
+                                    <div className="space-y-2">
+                                        <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
+                                            <div 
+                                                className="h-full bg-green-500 transition-all duration-300 ease-out" 
+                                                style={{ width: `${zipProgress}%` }}
+                                            ></div>
+                                        </div>
+                                        <p className="text-xs text-yellow-200 text-center animate-pulse font-mono">
+                                            {zipStatusText}
+                                        </p>
                                     </div>
                                 )}
                             </div>
