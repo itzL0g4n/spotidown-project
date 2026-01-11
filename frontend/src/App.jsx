@@ -1,9 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Download, Music, Search, Disc, CheckCircle2, AlertCircle, Sparkles, List, Play, FileArchive, Loader2, BarChart3, ChevronRight } from 'lucide-react';
 
-// URL Backend trên Render (Đúng như file cũ của bạn)
-const API_BASE_URL = 'https://spotidown-project.onrender.com';
-
 export default function App() {
   const [url, setUrl] = useState('');
   const [status, setStatus] = useState('idle'); // idle, processing, success, error
@@ -16,7 +13,7 @@ export default function App() {
   const [zipStatusText, setZipStatusText] = useState(''); 
   const [trackStatuses, setTrackStatuses] = useState({}); 
 
-  // Giả lập loading bar
+  // Giả lập loading bar cho phần tìm kiếm
   useEffect(() => {
     let interval;
     if (status === 'processing') {
@@ -49,7 +46,7 @@ export default function App() {
     setZipStatusText('');
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/info`, {
+      const response = await fetch('https://spotidown-project.onrender.com/api/info', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: url }),
@@ -66,16 +63,15 @@ export default function App() {
       }
     } catch (error) {
       setStatus('error');
-      setMessage('Không kết nối được Server (Render có thể đang khởi động, đợi 1 chút nhé).');
+      setMessage('Không kết nối được Backend.');
     }
   };
 
   const downloadTrack = async (trackUrl, trackId) => {
-    // Đặt trạng thái loading cho track cụ thể
     setTrackStatuses(prev => ({ ...prev, [trackId]: 'loading' }));
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/download_track`, {
+      const response = await fetch('https://spotidown-project.onrender.com/api/download_track', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: trackUrl }),
@@ -83,13 +79,10 @@ export default function App() {
 
       const data = await response.json();
 
-      if (response.ok) {
+      if (response.ok && data.status === 'success') {
         setTrackStatuses(prev => ({ ...prev, [trackId]: 'success' }));
         const link = document.createElement('a');
-        // Xử lý link tải về (đảm bảo full path)
-        link.href = data.download_url.startsWith('http') 
-            ? data.download_url 
-            : `${API_BASE_URL}${data.download_url}`;
+        link.href = `https://spotidown-project.onrender.com${data.download_url}`;
         link.download = '';
         document.body.appendChild(link);
         link.click();
@@ -102,50 +95,60 @@ export default function App() {
     }
   };
 
+  // --- LOGIC TẢI ZIP BẤT ĐỒNG BỘ MỚI ---
   const downloadZip = async () => {
     if (!result || isZipping) return;
     
     setIsZipping(true);
-    setZipStatusText('Đang khởi tạo phiên làm việc...');
+    setZipStatusText('Đang khởi tạo task...');
     
-    let trackIndex = 0;
-    const progressInterval = setInterval(() => {
-      if (result.tracks && trackIndex < result.tracks.length) {
-        setZipStatusText(`Đang xử lý: ${result.tracks[trackIndex].name}...`);
-        trackIndex++;
-      } else {
-        setZipStatusText('Đang nén file và tạo gói tải xuống (Sắp xong)...');
-      }
-    }, 4000); 
-
     try {
-      const response = await fetch(`${API_BASE_URL}/api/download_zip`, {
+      // 1. Gửi yêu cầu bắt đầu
+      const startRes = await fetch('https://spotidown-project.onrender.com/api/start_zip', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: url }),
       });
+      
+      const startData = await startRes.json();
+      if (!startRes.ok) throw new Error(startData.error);
+      
+      const taskId = startData.task_id;
+      
+      // 2. Polling trạng thái mỗi 2 giây
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusRes = await fetch(`https://spotidown-project.onrender.com/api/status_zip/${taskId}`);
+          const statusData = await statusRes.json();
+          
+          if (statusData.status === 'processing') {
+             setZipStatusText(`${statusData.progress} (${statusData.percent}%)`);
+          } else if (statusData.status === 'completed') {
+             clearInterval(pollInterval);
+             setZipStatusText('Hoàn tất! Đang tải file về...');
+             
+             // Kích hoạt tải
+             const link = document.createElement('a');
+             link.href = `https://spotidown-project.onrender.com${statusData.download_url}`;
+             link.download = '';
+             document.body.appendChild(link);
+             link.click();
+             document.body.removeChild(link);
+             
+             setIsZipping(false);
+          } else if (statusData.status === 'error') {
+             clearInterval(pollInterval);
+             setZipStatusText(`Lỗi: ${statusData.error}`);
+             setIsZipping(false);
+          }
+        } catch (err) {
+          console.error(err);
+        }
+      }, 2000);
 
-      const data = await response.json();
-
-      if (response.ok) {
-        setZipStatusText('Hoàn tất! Đang tải file về máy...');
-        const link = document.createElement('a');
-        link.href = data.download_url.startsWith('http') 
-            ? data.download_url 
-            : `${API_BASE_URL}${data.download_url}`;
-        link.download = '';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-      } else {
-        alert("Lỗi khi tạo file Zip: " + data.error);
-      }
     } catch (e) {
-      alert("Lỗi kết nối hoặc xử lý quá lâu.");
-    } finally {
-      clearInterval(progressInterval); 
+      setZipStatusText("Lỗi kết nối server.");
       setIsZipping(false);
-      setTimeout(() => setZipStatusText(''), 3000);
     }
   };
 
@@ -297,27 +300,18 @@ export default function App() {
 
                         {/* Actions */}
                         {result.type === 'track' ? (
-                            // NÚT TẢI SINGLE TRACK - ĐÃ ĐƯỢC NÂNG CẤP UI VỚI LOADING
                             <button 
                                 onClick={() => downloadTrack(url, result.id)}
-                                disabled={trackStatuses[result.id] === 'loading' || trackStatuses[result.id] === 'success'}
-                                className={`w-full font-bold py-4 rounded-xl transition-all flex items-center justify-center gap-2
-                                    ${trackStatuses[result.id] === 'loading' 
-                                        ? 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20 cursor-wait' 
-                                        : trackStatuses[result.id] === 'success'
-                                            ? 'bg-green-500/10 text-green-500 border border-green-500/20 cursor-default'
-                                            : 'bg-green-500 hover:bg-green-400 text-black shadow-lg hover:shadow-green-500/20 hover:scale-[1.02]'
-                                    }`}
+                                className="w-full bg-green-500 hover:bg-green-400 text-black font-bold py-4 rounded-xl transition-all hover:scale-[1.02] hover:shadow-lg hover:shadow-green-500/20 flex items-center justify-center gap-2"
                             >
                                 {trackStatuses[result.id] === 'loading' && <Loader2 className="w-5 h-5 animate-spin" />}
                                 {trackStatuses[result.id] === 'success' && <CheckCircle2 className="w-5 h-5" />}
                                 {!trackStatuses[result.id] && <Download className="w-5 h-5" />}
                                 
-                                {trackStatuses[result.id] === 'loading' ? 'Đang xử lý...' : 
-                                 trackStatuses[result.id] === 'success' ? 'Đã tải xong' : 'Tải Ngay'}
+                                {trackStatuses[result.id] === 'loading' ? 'Đang tải...' : 
+                                 trackStatuses[result.id] === 'success' ? 'Hoàn tất' : 'Tải Ngay'}
                             </button>
                         ) : (
-                            // NÚT TẢI PLAYLIST (Giữ nguyên)
                             <div className="w-full space-y-3">
                                 <div className="grid grid-cols-2 gap-3 mb-4">
                                     <div className="bg-white/5 rounded-xl p-3 border border-white/5 flex flex-col items-center">
@@ -378,45 +372,4 @@ export default function App() {
                                             {idx + 1}
                                         </span>
                                         
-                                        <img src={track.cover || result.cover} className="w-12 h-12 rounded-lg bg-gray-800 object-cover shadow-sm group-hover:shadow-md transition-all" alt="" />
-                                        
-                                        <div className="flex-1 min-w-0">
-                                            <h4 className="font-bold text-gray-200 truncate group-hover:text-white transition-colors">{track.name}</h4>
-                                            <p className="text-xs text-gray-500 truncate">{track.artist}</p>
-                                        </div>
-
-                                        <button 
-                                            onClick={() => downloadTrack(track.url, track.id)}
-                                            disabled={status === 'loading' || status === 'success'}
-                                            className={`
-                                                w-10 h-10 rounded-full flex items-center justify-center transition-all
-                                                ${status === 'loading' ? 'bg-yellow-500/10 text-yellow-500' : ''}
-                                                ${status === 'success' ? 'bg-green-500/20 text-green-500' : ''}
-                                                ${status === 'error' ? 'bg-red-500/10 text-red-500' : ''}
-                                                ${!status ? 'bg-white/5 text-gray-400 hover:bg-green-500 hover:text-black hover:scale-110 shadow-lg' : ''}
-                                            `}
-                                            title="Tải bài này"
-                                        >
-                                            {status === 'loading' && <Disc className="w-5 h-5 animate-spin"/>}
-                                            {status === 'success' && <CheckCircle2 className="w-5 h-5"/>}
-                                            {status === 'error' && <AlertCircle className="w-5 h-5"/>}
-                                            {!status && <Download className="w-5 h-5"/>}
-                                        </button>
-                                    </div>
-                                )
-                            })}
-                        </div>
-                    </div>
-                )}
-             </div>
-          </div>
-        )}
-      </div>
-      
-      {/* Footer */}
-      <footer className="text-center py-6 text-gray-600 text-xs relative z-10">
-        <p>© 2026 SpotiDown Pro. Educational Purposes Only.</p>
-      </footer>
-    </div>
-  );
-}
+                                        <img src={track.cover || result.cover} className="w-12 h-12 rounded-lg bg-gray-800 object-cover shadow-sm group-hover:shadow-md transition-all
