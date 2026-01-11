@@ -59,7 +59,8 @@ def get_meta(url):
         return {'type':'playlist', 'name':p['name'], 'cover':p['images'][0]['url'], 'tracks':[{'name':i['track']['name'], 'artist':", ".join([a['name'] for a in i['track']['artists']])} for i in p['tracks']['items'] if i.get('track')]}
     elif 'album' in url:
         a = sp.album(url)
-        return {'type':'album', 'name':a['name'], 'cover':a['images'][0]['url'], 'tracks':[{'name':t['name'], 'artist':", ".join([ar['name'] for a in t['artists']])} for t in a['tracks']['items']]}
+        # SỬA LỖI: Đã đổi [ar['name'] for a...] thành [artist['name'] for artist in t['artists']]
+        return {'type':'album', 'name':a['name'], 'cover':a['images'][0]['url'], 'tracks':[{'name':t['name'], 'artist':", ".join([artist['name'] for artist in t['artists']])} for t in a['tracks']['items']]}
     raise Exception("Link không hỗ trợ")
 
 def dl_sc(query, final_name, title, artist):
