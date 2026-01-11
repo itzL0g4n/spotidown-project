@@ -1,8 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { Download, Music, Search, Disc, CheckCircle2, AlertCircle, Sparkles, List, Play, FileArchive, Loader2, BarChart3, ChevronRight } from 'lucide-react';
 
-// URL Backend (Đảm bảo đúng link Render của bạn)
-const API_BASE_URL = 'https://spotidown-project.onrender.com';
+// --- CẤU HÌNH URL BACKEND (RUNTIME CHECK) ---
+// Tự động nhận diện môi trường dựa trên trình duyệt thay vì biến môi trường build
+const getApiBaseUrl = () => {
+  if (typeof window !== 'undefined') {
+    const hostname = window.location.hostname;
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+      return 'http://localhost:5000';
+    }
+  }
+  // URL Production trên Render
+  return 'https://spotidown-project.onrender.com';
+};
+
+const API_BASE_URL = getApiBaseUrl();
 
 export default function App() {
   const [url, setUrl] = useState('');
@@ -14,25 +26,45 @@ export default function App() {
   // Trạng thái zipping (Async)
   const [isZipping, setIsZipping] = useState(false);
   const [zipStatusText, setZipStatusText] = useState(''); 
-  const [zipProgress, setZipProgress] = useState(0); // % tiến độ zip
+  const [zipProgress, setZipProgress] = useState(0); 
   const [trackStatuses, setTrackStatuses] = useState({}); 
+  
+  // Trạng thái chờ Cold Start
+  const [isTakingLong, setIsTakingLong] = useState(false);
 
-  // Loading bar giả lập cho lúc tìm kiếm
+  // Giả lập loading bar & Phát hiện Cold Start
   useEffect(() => {
     let interval;
+    let timeout;
+
     if (status === 'processing') {
       setProgress(10);
+      setIsTakingLong(false);
+
+      // Tăng progress bar giả lập
       interval = setInterval(() => {
         setProgress((prev) => {
           if (prev >= 90) return 90; 
           return prev + (prev < 50 ? 5 : 1);
         });
       }, 300);
+
+      // Nếu sau 5 giây vẫn chưa xong -> Server đang khởi động
+      timeout = setTimeout(() => {
+        setIsTakingLong(true);
+      }, 5000);
+
     } else if (status === 'success' || status === 'error') {
       clearInterval(interval);
+      clearTimeout(timeout);
       setProgress(100);
+      setIsTakingLong(false);
     }
-    return () => clearInterval(interval);
+
+    return () => {
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
   }, [status]);
 
   const handleFetchInfo = async () => {
@@ -67,8 +99,9 @@ export default function App() {
         setMessage(data.error || 'Lỗi từ Server.');
       }
     } catch (error) {
+      console.error(error);
       setStatus('error');
-      setMessage('Không kết nối được Backend.');
+      setMessage('Không kết nối được Backend. (Có thể server đang ngủ hoặc sai URL)');
     }
   };
 
@@ -87,7 +120,7 @@ export default function App() {
       if (response.ok && data.status === 'success') {
         setTrackStatuses(prev => ({ ...prev, [trackId]: 'success' }));
         const link = document.createElement('a');
-        link.href = `${API_BASE_URL}${data.download_url}`;
+        link.href = data.download_url.startsWith('http') ? data.download_url : `${API_BASE_URL}${data.download_url}`;
         link.download = '';
         document.body.appendChild(link);
         link.click();
@@ -100,8 +133,7 @@ export default function App() {
     }
   };
 
-  // --- LOGIC TẢI ZIP BẤT ĐỒNG BỘ (ASYNC POLLING) ---
-  // Đây là chìa khóa để tải album lớn mà không bị timeout
+  // --- LOGIC TẢI ZIP BẤT ĐỒNG BỘ ---
   const downloadZip = async () => {
     if (!result || isZipping) return;
     
@@ -110,7 +142,6 @@ export default function App() {
     setZipProgress(5);
     
     try {
-      // 1. Gửi yêu cầu bắt đầu -> Nhận Task ID
       const startRes = await fetch(`${API_BASE_URL}/api/start_zip`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -122,31 +153,27 @@ export default function App() {
       
       const taskId = startData.task_id;
       
-      // 2. Hỏi thăm server liên tục (Polling)
       const pollInterval = setInterval(async () => {
         try {
           const statusRes = await fetch(`${API_BASE_URL}/api/status_zip/${taskId}`);
           const statusData = await statusRes.json();
           
           if (statusData.status === 'processing' || statusData.status === 'queued') {
-             // Cập nhật trạng thái cho người dùng thấy
              setZipStatusText(statusData.progress || 'Đang xử lý...');
              setZipProgress(statusData.percent || 10);
              
           } else if (statusData.status === 'completed') {
-             // Hoàn tất -> Tải file
              clearInterval(pollInterval);
              setZipStatusText('Hoàn tất! Đang tải file về...');
              setZipProgress(100);
              
              const link = document.createElement('a');
-             link.href = `${API_BASE_URL}${statusData.download_url}`;
+             link.href = statusData.download_url.startsWith('http') ? statusData.download_url : `${API_BASE_URL}${statusData.download_url}`;
              link.download = '';
              document.body.appendChild(link);
              link.click();
              document.body.removeChild(link);
              
-             // Reset sau 3 giây
              setTimeout(() => {
                  setIsZipping(false);
                  setZipStatusText('');
@@ -161,7 +188,7 @@ export default function App() {
         } catch (err) {
           console.error("Polling error:", err);
         }
-      }, 2000); // Hỏi mỗi 2 giây
+      }, 2000);
 
     } catch (e) {
       setZipStatusText(`Lỗi kết nối: ${e.message}`);
@@ -178,9 +205,9 @@ export default function App() {
     setIsZipping(false);
     setZipStatusText('');
     setZipProgress(0);
+    setIsTakingLong(false);
   }
 
-  // Visualizer bars component
   const MusicBars = () => (
     <div className="flex items-end gap-1 h-8 mb-2">
       <div className="w-1.5 bg-green-500 rounded-t-full animate-[bounce_1s_infinite] h-[60%]"></div>
@@ -209,7 +236,7 @@ export default function App() {
         <header className="flex flex-col items-center justify-center mb-12 pt-8">
            <div className="flex items-center gap-2 mb-4 px-4 py-1.5 rounded-full bg-white/5 border border-white/10 backdrop-blur-md shadow-lg shadow-green-500/5 hover:border-green-500/30 transition-colors cursor-default">
              <Sparkles className="w-3.5 h-3.5 text-yellow-400" />
-             <span className="text-[10px] font-bold text-gray-300 tracking-widest uppercase">Version 3.1 Stable</span>
+             <span className="text-[10px] font-bold text-gray-300 tracking-widest uppercase">Version 3.2 Stable</span>
            </div>
            
            <div className="flex items-center gap-3">
@@ -261,6 +288,14 @@ export default function App() {
                         <div className="h-full bg-green-500 animate-[loading_1s_ease-in-out_infinite]" style={{ width: `${progress}%` }}></div>
                       </div>
                       <p className="text-green-400 font-mono text-sm animate-pulse">CONNECTING TO SERVER...</p>
+                      
+                      {/* Thông báo Cold Start */}
+                      {isTakingLong && (
+                        <div className="mt-2 text-yellow-300 text-xs bg-yellow-500/10 border border-yellow-500/20 p-2 rounded-lg animate-in fade-in">
+                           <i className="fa-solid fa-mug-hot mr-2"></i>
+                           Server đang khởi động từ chế độ ngủ (Cold Start). Vui lòng đợi khoảng 1 phút...
+                        </div>
+                      )}
                    </div>
                  ) : status === 'error' ? (
                    <div className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-200 animate-in fade-in slide-in-from-top-2">
