@@ -23,7 +23,6 @@ DOWNLOAD_FOLDER = 'downloads'
 if not os.path.exists(DOWNLOAD_FOLDER): os.makedirs(DOWNLOAD_FOLDER)
 
 # --- CẤU HÌNH SPOTIFY ---
-# Thay bằng Key của bạn nếu cần, hoặc để mặc định để test fallback (có thể bị giới hạn)
 SPOTIPY_CLIENT_ID = os.environ.get('SPOTIPY_CLIENT_ID', '835be40df95f4ceb9cd48db5ab553e1e')
 SPOTIPY_CLIENT_SECRET = os.environ.get('SPOTIPY_CLIENT_SECRET', '4ab634805b2a49dfa66550fccccaf7b4')
 
@@ -60,25 +59,25 @@ def get_meta(url):
         return {'type':'playlist', 'name':p['name'], 'cover':p['images'][0]['url'], 'tracks':[{'name':i['track']['name'], 'artist':", ".join([a['name'] for a in i['track']['artists']])} for i in p['tracks']['items'] if i.get('track')]}
     elif 'album' in url:
         a = sp.album(url)
-        return {'type':'album', 'name':a['name'], 'cover':a['images'][0]['url'], 'tracks':[{'name':t['name'], 'artist':", ".join([ar['name'] for ar in t['artists']])} for t in a['tracks']['items']]}
+        return {'type':'album', 'name':a['name'], 'cover':a['images'][0]['url'], 'tracks':[{'name':t['name'], 'artist':", ".join([ar['name'] for a in t['artists']])} for t in a['tracks']['items']]}
     raise Exception("Link không hỗ trợ")
 
 def dl_sc(query, final_name, title, artist):
-    """Tải từ SoundCloud dùng thư mục tạm UUID để đảm bảo 100% bắt được file"""
+    """Tải từ SoundCloud dùng thư mục tạm UUID"""
     safe_name = sanitize(final_name)
     final_path = os.path.join(DOWNLOAD_FOLDER, f"{safe_name}.mp3")
     
     # 1. Cache Hit
     if os.path.exists(final_path): return final_path
 
-    # 2. Tạo folder tạm riêng biệt
+    # 2. Tạo folder tạm
     temp_dir = os.path.join(DOWNLOAD_FOLDER, f"temp_{uuid.uuid4()}")
     os.makedirs(temp_dir, exist_ok=True)
 
     try:
         opts = {
             'format': 'bestaudio/best',
-            'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'), # Tên gốc không quan trọng
+            'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
             'default_search': 'scsearch1', # SOUNDCLOUD ONLY
             'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
             'quiet': True, 'no_warnings': True, 'noplaylist': True,
@@ -87,11 +86,9 @@ def dl_sc(query, final_name, title, artist):
         with yt_dlp.YoutubeDL(opts) as ydl:
             ydl.download([query])
 
-        # 3. Tìm file MP3 bất kỳ trong folder tạm
         files = [f for f in os.listdir(temp_dir) if f.endswith('.mp3')]
         if not files: return None
         
-        # 4. Di chuyển và gắn thẻ
         shutil.move(os.path.join(temp_dir, files[0]), final_path)
         
         try:
@@ -114,6 +111,11 @@ def dl_sc(query, final_name, title, artist):
 @app.route('/')
 def idx(): return jsonify({"status":"SoundCloud Engine Ready"})
 
+# Endpoint mới để phục vụ file cho Frontend tải về
+@app.route('/api/file/<path:filename>', methods=['GET'])
+def get_file(filename):
+    return send_file(os.path.join(DOWNLOAD_FOLDER, filename), as_attachment=True)
+
 @app.route('/api/info', methods=['POST'])
 def info():
     try:
@@ -127,11 +129,16 @@ def dl_track():
         url = request.json.get('url')
         meta = get_meta(url)
         t = meta['tracks'][0]
-        # Query không dùng chữ 'audio' với SC để chính xác hơn
         path = dl_sc(f"{t['name']} {t['artist']}", f"{t['name']} - {t['artist']}", t['name'], t['artist'])
         
         if not path: return jsonify({'error':'Không tìm thấy trên SoundCloud'}), 404
-        return send_file(path, as_attachment=True, download_name=os.path.basename(path))
+        
+        # SỬA LỖI: Trả về JSON URL thay vì file trực tiếp
+        filename = os.path.basename(path)
+        return jsonify({
+            "status": "success",
+            "download_url": f"/api/file/{filename}"
+        })
     except Exception as e: return jsonify({'error':str(e)}), 500
 
 @app.route('/api/download_zip', methods=['POST'])
@@ -141,7 +148,6 @@ def dl_zip():
         meta = get_meta(url)
         aname = sanitize(meta['name'])
         
-        # Folder tạm để gom file zip
         zip_temp = os.path.join(DOWNLOAD_FOLDER, f"zip_{uuid.uuid4()}")
         os.makedirs(zip_temp, exist_ok=True)
 
@@ -159,14 +165,13 @@ def dl_zip():
         zpath = os.path.join(DOWNLOAD_FOLDER, f"{aname}.zip")
         shutil.make_archive(zpath.replace('.zip',''), 'zip', zip_temp)
         shutil.rmtree(zip_temp)
-
-        @after_this_request
-        def cl(r): 
-            try: os.remove(zpath)
-            except: pass
-            return r
-            
-        return send_file(zpath, as_attachment=True, download_name=f"{aname}.zip")
+        
+        # SỬA LỖI: Trả về JSON URL thay vì file trực tiếp
+        filename = os.path.basename(zpath)
+        return jsonify({
+            "status": "success",
+            "download_url": f"/api/file/{filename}"
+        })
     except Exception as e: return jsonify({'error':str(e)}), 500
 
 if __name__ == '__main__': app.run(host='0.0.0.0', port=5000, debug=True)
