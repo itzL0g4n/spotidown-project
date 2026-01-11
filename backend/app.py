@@ -2,6 +2,7 @@ import os
 import re
 import shutil
 import logging
+import uuid  # Thêm thư viện UUID để tạo folder tạm duy nhất
 import yt_dlp
 from flask import Flask, request, jsonify, send_file, after_this_request
 from flask_cors import CORS
@@ -54,62 +55,81 @@ def get_spotify_metadata(url):
                 if item.get('track'):
                     t = item['track']
                     tracks.append({'name': t['name'], 'artist': ", ".join([a['name'] for a in t['artists']])})
-            return {'type': 'playlist', 'name': pl['name'], 'tracks_list': tracks}
+            return {
+                'type': 'playlist', 
+                'name': pl['name'], 
+                'cover': pl['images'][0]['url'] if pl['images'] else '', # Lấy cover playlist
+                'tracks_list': tracks
+            }
         elif 'album' in url:
             al = sp.album(url)
             tracks = [{'name': t['name'], 'artist': ", ".join([a['name'] for a in t['artists']])} for t in al['tracks']['items']]
-            return {'type': 'album', 'name': al['name'], 'tracks_list': tracks}
+            return {
+                'type': 'album', 
+                'name': al['name'], 
+                'cover': al['images'][0]['url'] if al['images'] else '', # Lấy cover album
+                'tracks_list': tracks
+            }
     except Exception as e:
         raise Exception(f"Lỗi Spotify: {str(e)}")
 
 def dl_soundcloud(query, output_folder, final_filename, meta_title, meta_artist):
-    # Dùng ID làm tên file tạm để tránh lỗi ký tự đặc biệt
-    temp_template = os.path.join(output_folder, '%(id)s.%(ext)s')
+    # Tạo folder tạm định danh (UUID) để cô lập quá trình tải
+    # Giúp tránh xung đột file và dễ dàng tìm file kết quả
+    task_id = str(uuid.uuid4())
+    temp_dir = os.path.join(output_folder, f"temp_{task_id}")
+    os.makedirs(temp_dir, exist_ok=True)
     
     ydl_opts = {
         'format': 'bestaudio/best',
-        'outtmpl': temp_template,
+        'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'), # Lưu vào temp dir
         'default_search': 'scsearch1',
         'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
         'quiet': True,
         'noplaylist': True,
-        'concurrent_fragment_downloads': 5, # <--- TĂNG TỐC ĐỘ TẢI (Tải 5 luồng cùng lúc)
+        'concurrent_fragment_downloads': 5, 
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(query, download=True)
-            if 'entries' in info: info = info['entries'][0]
+            ydl.download([query])
             
-            # File tạm yt-dlp tạo ra (ID.mp3)
-            temp_file = os.path.join(output_folder, f"{info['id']}.mp3")
-            
-            if not os.path.exists(temp_file): return None
+        # Tìm file MP3 trong folder tạm (bất kể tên là gì)
+        files = [f for f in os.listdir(temp_dir) if f.endswith('.mp3')]
+        
+        if not files:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return None
 
-            # Đổi tên file sang tên chuẩn
-            clean_name = sanitize_filename(final_filename)
-            final_path = os.path.join(output_folder, f"{clean_name}.mp3")
-            
-            cnt = 1
-            while os.path.exists(final_path):
-                final_path = os.path.join(output_folder, f"{clean_name} ({cnt}).mp3")
-                cnt += 1
-                
-            shutil.move(temp_file, final_path)
+        # Lấy file đầu tiên tìm thấy
+        source_file = os.path.join(temp_dir, files[0])
 
-            # Gắn thẻ metadata
-            try:
-                audio = EasyID3(final_path)
-                audio['title'] = meta_title
-                audio['artist'] = meta_artist
-                audio.save()
-            except: 
-                try: ID3(final_path).save() 
-                except: pass
-                
-            return final_path
+        # Đổi tên file sang tên chuẩn
+        clean_name = sanitize_filename(final_filename)
+        final_path = os.path.join(output_folder, f"{clean_name}.mp3")
+        
+        cnt = 1
+        while os.path.exists(final_path):
+            final_path = os.path.join(output_folder, f"{clean_name} ({cnt}).mp3")
+            cnt += 1
+            
+        shutil.move(source_file, final_path)
+        shutil.rmtree(temp_dir, ignore_errors=True) # Dọn dẹp folder tạm
+
+        # Gắn thẻ metadata
+        try:
+            audio = EasyID3(final_path)
+            audio['title'] = meta_title
+            audio['artist'] = meta_artist
+            audio.save()
+        except: 
+            try: ID3(final_path).save() 
+            except: pass
+            
+        return final_path
     except Exception as e:
         logging.error(f"DL Error ({query}): {e}")
+        shutil.rmtree(temp_dir, ignore_errors=True) # Dọn dẹp nếu lỗi
         return None
 
 # --- ROUTES ---
@@ -124,9 +144,12 @@ def api_info():
     if not url: return jsonify({'error': 'No URL'}), 400
     try:
         data = get_spotify_metadata(url)
+        # SỬA LỖI: Thêm trường 'cover' và 'artist' vào response trả về
         return jsonify({
             'type': data['type'],
             'name': data['name'],
+            'artist': data.get('artist', ''), # Thêm artist
+            'cover': data.get('cover', ''),   # Thêm cover
             'tracks': [{'id': i, 'name': t['name'], 'artist': t['artist'], 'cover': data.get('cover')} 
                        for i, t in enumerate(data['tracks_list'])]
         })
