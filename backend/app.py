@@ -12,7 +12,6 @@ from mutagen.id3 import ID3
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
 
-# --- CẤU HÌNH ---
 app = Flask(__name__)
 CORS(app)
 logging.basicConfig(level=logging.INFO)
@@ -37,9 +36,7 @@ def sanitize_filename(name):
     return re.sub(r'[\\/*?:"<>|]', "", name).strip()
 
 def get_spotify_metadata(url):
-    """Chỉ dùng Spotify API để lấy thông tin chuẩn."""
     if not sp: raise Exception("Thiếu Spotify API Key.")
-    
     try:
         if 'track' in url:
             item = sp.track(url)
@@ -66,36 +63,33 @@ def get_spotify_metadata(url):
         raise Exception(f"Lỗi Spotify: {str(e)}")
 
 def dl_soundcloud(query, output_folder, final_filename, meta_title, meta_artist):
-    """Hàm tải đơn giản: Tìm SC -> Tải -> Đổi tên -> Gắn thẻ"""
-    # Đường dẫn file tạm dựa trên ID để yt-dlp quản lý
+    # Dùng ID làm tên file tạm để tránh lỗi ký tự đặc biệt
     temp_template = os.path.join(output_folder, '%(id)s.%(ext)s')
     
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': temp_template,
-        'default_search': 'scsearch1', # QUAN TRỌNG: Chỉ tìm 1 kết quả trên SoundCloud
+        'default_search': 'scsearch1',
         'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
         'quiet': True,
         'noplaylist': True,
+        'concurrent_fragment_downloads': 5, # <--- TĂNG TỐC ĐỘ TẢI (Tải 5 luồng cùng lúc)
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # 1. Tìm và lấy info trước
             info = ydl.extract_info(query, download=True)
-            if 'entries' in info: info = info['entries'][0] # scsearch trả về list
+            if 'entries' in info: info = info['entries'][0]
             
-            # 2. Xác định file vừa tải (ID.mp3)
+            # File tạm yt-dlp tạo ra (ID.mp3)
             temp_file = os.path.join(output_folder, f"{info['id']}.mp3")
             
-            if not os.path.exists(temp_file):
-                return None # Không tải được
+            if not os.path.exists(temp_file): return None
 
-            # 3. Đổi tên sang tên chuẩn từ Spotify
+            # Đổi tên file sang tên chuẩn
             clean_name = sanitize_filename(final_filename)
             final_path = os.path.join(output_folder, f"{clean_name}.mp3")
             
-            # Xử lý trùng
             cnt = 1
             while os.path.exists(final_path):
                 final_path = os.path.join(output_folder, f"{clean_name} ({cnt}).mp3")
@@ -103,7 +97,7 @@ def dl_soundcloud(query, output_folder, final_filename, meta_title, meta_artist)
                 
             shutil.move(temp_file, final_path)
 
-            # 4. Gắn thẻ
+            # Gắn thẻ metadata
             try:
                 audio = EasyID3(final_path)
                 audio['title'] = meta_title
@@ -130,7 +124,6 @@ def api_info():
     if not url: return jsonify({'error': 'No URL'}), 400
     try:
         data = get_spotify_metadata(url)
-        # Format cho Frontend
         return jsonify({
             'type': data['type'],
             'name': data['name'],
@@ -144,11 +137,8 @@ def api_info():
 def api_download_track():
     url = request.json.get('url')
     try:
-        # Lấy lại info để chắc chắn có tên bài hát
         meta = get_spotify_metadata(url)
         track = meta['tracks_list'][0]
-        
-        # Tạo query: "Tên bài Tên ca sĩ"
         query = f"{track['name']} {track['artist']}"
         logging.info(f"Downloading: {query}")
         
