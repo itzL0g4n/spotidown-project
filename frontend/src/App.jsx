@@ -2,8 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Download, Music, Search, Disc, CheckCircle2, AlertCircle, Sparkles, List, Play, FileArchive, Loader2, BarChart3, ChevronRight } from 'lucide-react';
 
 // --- CẤU HÌNH ĐƠN GIẢN (HARDCODED) ---
-// Chạy trực tiếp trên Render, không kiểm tra môi trường loằng ngoằng nữa
-const API_BASE_URL = 'https://spotidown-project.onrender.com';
+const API_BASE_URL = 'http://217.160.125.127:13268/';
 
 export default function App() {
   const [url, setUrl] = useState('');
