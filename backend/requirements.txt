@@ -1,6 +1,6 @@
 flask
 flask-cors
-yt-dlp @ git+https://www.google.com/search?q=https://github.com/yt-dlp/yt-dlp.git%40master
+yt-dlp>=0
 spotipy
 requests
 mutagen
