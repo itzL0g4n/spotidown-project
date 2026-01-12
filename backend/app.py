@@ -67,21 +67,10 @@ threading.Thread(target=cleanup_task, daemon=True).start()
 
 def sanitize(n): return re.sub(r'[\\/*?:"<>|]', "", n).strip()
 
-# --- HELPER: LÀM SẠCH TÊN BÀI HÁT ---
-def clean_title(title):
-    # Loại bỏ nội dung trong ngoặc đơn () và ngoặc vuông []
-    # Ví dụ: "Bài hát (Remix)" -> "Bài hát"
-    clean = re.sub(r'\([^)]*\)', '', title)
-    clean = re.sub(r'\[[^]]*\]', '', clean)
-    # Loại bỏ khoảng trắng thừa
-    return clean.strip()
-
-# --- FIX 1: LẤY FULL TRACKS (PAGINATION) ---
 def get_all_tracks(sp_result, type='album'):
     tracks = []
     batch = sp_result['tracks'] if 'tracks' in sp_result else sp_result
     tracks.extend(batch['items'])
-
     while batch['next']:
         try:
             batch = sp.next(batch)
@@ -91,7 +80,6 @@ def get_all_tracks(sp_result, type='album'):
 
 def get_meta(url):
     if not sp: raise Exception("No Spotify Key")
-    
     if 'track' in url:
         t = sp.track(url)
         art = ", ".join([a['name'] for a in t['artists']])
@@ -117,8 +105,8 @@ def get_meta(url):
         return {'type':'album', 'name':a['name'], 'cover':a['images'][0]['url'], 'tracks':track_list}
     raise Exception("Link không hỗ trợ")
 
-# --- FIX 2: ENGINE THÔNG MINH (MULTI-QUERY SOUNDCLOUD) ---
-def dl_sc_engine(query, output_folder, final_name, meta_title, meta_artist):
+# --- ENGINE TẢI NHẠC (YOUTUBE WITH COOKIES) ---
+def dl_engine(query, output_folder, final_name, meta_title, meta_artist):
     safe_name = sanitize(final_name)
     final_path = os.path.join(output_folder, f"{safe_name}.mp3")
     
@@ -128,65 +116,69 @@ def dl_sc_engine(query, output_folder, final_name, meta_title, meta_artist):
     temp_dir = os.path.join(TEMP_WORK_DIR, f"temp_{temp_id}")
     os.makedirs(temp_dir, exist_ok=True)
 
-    user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    # Kiểm tra xem có file cookies.txt không
+    cookie_file = 'cookies.txt'
+    has_cookies = os.path.exists(cookie_file)
+    
+    if has_cookies:
+        logging.info("🍪 Phát hiện cookies.txt! Sử dụng để xác thực YouTube.")
+    else:
+        logging.warning("⚠️ Không tìm thấy cookies.txt. Khả năng cao sẽ bị YouTube chặn (403).")
 
-    # CHIẾN LƯỢC TÌM KIẾM MỚI (CHỈ DÙNG SOUNDCLOUD)
-    # 1. Tìm nguyên bản: "Tên bài (Info) Nghệ sĩ"
-    # 2. Tìm rút gọn: "Tên bài Nghệ sĩ" (Bỏ ngoặc) -> Fix được lỗi bài hát của bạn
-    # 3. Tìm tối giản: "Tên bài" (Bỏ luôn nghệ sĩ nếu cần thiết)
-    
-    cleaned_title = clean_title(meta_title)
-    
-    search_queries = [
-        f"{meta_title} {meta_artist}",         # Query gốc
-        f"{cleaned_title} {meta_artist}",      # Query sạch (bỏ ngoặc)
-        f"{cleaned_title}"                     # Query đường cùng
+    # Chiến lược: Ưu tiên YouTube (vì nhạc chuẩn) -> Fallback SoundCloud
+    strategies = [
+        {'src': 'ytsearch1', 'name': 'YouTube'},
+        {'src': 'scsearch1', 'name': 'SoundCloud'} 
     ]
-    
-    # Loại bỏ trùng lặp (nếu tên bài vốn không có ngoặc)
-    search_queries = list(dict.fromkeys(search_queries))
 
-    for idx, search_q in enumerate(search_queries):
-        try:
-            if idx > 0: logging.info(f"🔄 Thử lại với từ khóa đơn giản hơn: '{search_q}'")
-            
-            opts = {
-                'format': 'bestaudio/best',
-                'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
-                'default_search': 'scsearch1', # CHỈ DÙNG SOUNDCLOUD
-                'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
-                'quiet': True, 'no_warnings': True, 'noplaylist': True,
-                'user_agent': user_agent,
-                'socket_timeout': 20,
-            }
-            
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                ydl.download([search_q])
-
-            files = [f for f in os.listdir(temp_dir) if f.endswith('.mp3')]
-            if files:
-                shutil.move(os.path.join(temp_dir, files[0]), final_path)
-                try:
-                    tag = EasyID3(final_path)
-                    tag['title'] = meta_title
-                    tag['artist'] = meta_artist
-                    tag.save()
-                except: pass
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                logging.info(f"✅ Tải thành công: {final_name}")
-                return final_path
+    for strat in strategies:
+        # Nếu là YouTube mà không có cookies thì vẫn thử (nhên xui), nhưng log cảnh báo
         
-        except Exception as e:
-            logging.warning(f"⚠️ Query '{search_q}' thất bại. Đang thử cách khác...")
-            time.sleep(2) # Nghỉ ngắn trước khi thử query tiếp theo
-        
-        # Dọn temp mỗi lần thử
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        os.makedirs(temp_dir, exist_ok=True)
+        for attempt in range(2):
+            try:
+                logging.info(f"🔎 Đang tìm '{query}' trên {strat['name']} (Lần {attempt+1})...")
+                
+                opts = {
+                    'format': 'bestaudio/best',
+                    'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
+                    'default_search': strat['src'],
+                    'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
+                    'quiet': True, 'no_warnings': True, 'noplaylist': True,
+                    'socket_timeout': 30,
+                    'nocheckcertificate': True,
+                }
 
-    # Thất bại hoàn toàn sau khi thử mọi biến thể từ khóa
+                # QUAN TRỌNG: Nạp cookies nếu tìm trên YouTube
+                if strat['src'] == 'ytsearch1' and has_cookies:
+                    opts['cookiefile'] = cookie_file
+
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    ydl.download([query])
+
+                files = [f for f in os.listdir(temp_dir) if f.endswith('.mp3')]
+                if files:
+                    shutil.move(os.path.join(temp_dir, files[0]), final_path)
+                    try:
+                        tag = EasyID3(final_path)
+                        tag['title'] = meta_title
+                        tag['artist'] = meta_artist
+                        tag.save()
+                    except: pass
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    logging.info(f"✅ Thành công ({strat['name']}): {final_name}")
+                    return final_path
+            
+            except Exception as e:
+                logging.warning(f"⚠️ {strat['name']} Lỗi: {str(e)}")
+                # Nếu lỗi Sign in required hoặc 403 mà đang dùng cookies -> Cookies hết hạn
+                if "Sign in" in str(e) or "403" in str(e):
+                    logging.error("❌ Cookies có thể đã hết hạn hoặc bị chặn.")
+                time.sleep(3)
+            
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            os.makedirs(temp_dir, exist_ok=True)
+
     shutil.rmtree(temp_dir, ignore_errors=True)
-    logging.error(f"❌ Thất bại hoàn toàn bài: {meta_title}")
     return None
 
 # --- WORKER ---
@@ -206,18 +198,18 @@ def background_zip_worker(task_id, url):
             download_tasks[task_id]['progress'] = f"Đang tải {idx + 1}/{total}: {t['name']}"
             download_tasks[task_id]['percent'] = int(((idx) / total) * 100)
             
-            # Truyền đầy đủ thông tin để hàm dl_sc_engine tự tạo query
-            path = dl_sc_engine(None, album_final_dir, f"{t['name']} - {t['artist']}", t['name'], t['artist'])
+            # Query đơn giản để YouTube tự tìm bản chuẩn nhất (Official Audio)
+            query = f"{t['name']} {t['artist']} audio" 
+            path = dl_engine(query, album_final_dir, f"{t['name']} - {t['artist']}", t['name'], t['artist'])
             
             if path: success_count += 1
             else: logging.error(f"❌ SKIPPED: {t['name']}")
 
-            # Delay an toàn
             time.sleep(random.uniform(2, 4))
 
         if success_count == 0:
             download_tasks[task_id]['status'] = 'error'
-            download_tasks[task_id]['error'] = 'Lỗi hệ thống: Không tải được bài nào.'
+            download_tasks[task_id]['error'] = 'Lỗi: Không tải được bài nào (Kiểm tra Cookies/IP).'
             shutil.rmtree(album_final_dir, ignore_errors=True)
             return
 
@@ -239,7 +231,7 @@ def background_zip_worker(task_id, url):
         except: pass
 
 @app.route('/')
-def idx(): return jsonify({"status":"Smart SC Engine Ready"})
+def idx(): return jsonify({"status":"YouTube (Cookies) Engine Ready"})
 
 @app.route('/api/info', methods=['POST'])
 def info():
@@ -261,8 +253,7 @@ def dl_track():
         url = request.json.get('url')
         meta = get_meta(url)
         t = meta['tracks'][0]
-        # Download track lẻ cũng dùng cơ chế thông minh mới
-        path = dl_sc_engine(None, DOWNLOAD_FOLDER, f"{t['name']} - {t['artist']}", t['name'], t['artist'])
+        path = dl_engine(f"{t['name']} {t['artist']} audio", DOWNLOAD_FOLDER, f"{t['name']} - {t['artist']}", t['name'], t['artist'])
         
         if not path: return jsonify({'error':'Không tìm thấy bài hát'}), 404
         
