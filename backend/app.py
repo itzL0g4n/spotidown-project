@@ -105,7 +105,7 @@ def get_meta(url):
         return {'type':'album', 'name':a['name'], 'cover':a['images'][0]['url'], 'tracks':track_list}
     raise Exception("Link không hỗ trợ")
 
-# --- ENGINE TẢI NHẠC (YOUTUBE WITH COOKIES) ---
+# --- ENGINE TẢI NHẠC (YOUTUBE WITH ENV COOKIES) ---
 def dl_engine(query, output_folder, final_name, meta_title, meta_artist):
     safe_name = sanitize(final_name)
     final_path = os.path.join(output_folder, f"{safe_name}.mp3")
@@ -116,24 +116,32 @@ def dl_engine(query, output_folder, final_name, meta_title, meta_artist):
     temp_dir = os.path.join(TEMP_WORK_DIR, f"temp_{temp_id}")
     os.makedirs(temp_dir, exist_ok=True)
 
-    # Kiểm tra xem có file cookies.txt không
+    # --- XỬ LÝ COOKIES TỪ BIẾN MÔI TRƯỜNG ---
     cookie_file = 'cookies.txt'
+    
+    # Ưu tiên 1: Đọc từ biến môi trường COOKIES trên Render
+    env_cookies = os.environ.get('COOKIES')
+    if env_cookies:
+        try:
+            # Ghi nội dung biến môi trường ra file cookies.txt
+            with open(cookie_file, 'w', encoding='utf-8') as f:
+                f.write(env_cookies)
+            logging.info("🍪 Đã tạo cookies.txt từ biến môi trường COOKIES.")
+        except Exception as e:
+            logging.error(f"❌ Lỗi ghi file cookies từ Env: {e}")
+
     has_cookies = os.path.exists(cookie_file)
     
-    if has_cookies:
-        logging.info("🍪 Phát hiện cookies.txt! Sử dụng để xác thực YouTube.")
-    else:
-        logging.warning("⚠️ Không tìm thấy cookies.txt. Khả năng cao sẽ bị YouTube chặn (403).")
+    if not has_cookies:
+        logging.warning("⚠️ Không tìm thấy cookies (File hoặc Env). YouTube có thể chặn 403.")
 
-    # Chiến lược: Ưu tiên YouTube (vì nhạc chuẩn) -> Fallback SoundCloud
+    # Chiến lược: Ưu tiên YouTube -> Fallback SoundCloud
     strategies = [
         {'src': 'ytsearch1', 'name': 'YouTube'},
         {'src': 'scsearch1', 'name': 'SoundCloud'} 
     ]
 
     for strat in strategies:
-        # Nếu là YouTube mà không có cookies thì vẫn thử (nhên xui), nhưng log cảnh báo
-        
         for attempt in range(2):
             try:
                 logging.info(f"🔎 Đang tìm '{query}' trên {strat['name']} (Lần {attempt+1})...")
@@ -148,7 +156,7 @@ def dl_engine(query, output_folder, final_name, meta_title, meta_artist):
                     'nocheckcertificate': True,
                 }
 
-                # QUAN TRỌNG: Nạp cookies nếu tìm trên YouTube
+                # Nạp cookies nếu tìm trên YouTube
                 if strat['src'] == 'ytsearch1' and has_cookies:
                     opts['cookiefile'] = cookie_file
 
@@ -170,7 +178,6 @@ def dl_engine(query, output_folder, final_name, meta_title, meta_artist):
             
             except Exception as e:
                 logging.warning(f"⚠️ {strat['name']} Lỗi: {str(e)}")
-                # Nếu lỗi Sign in required hoặc 403 mà đang dùng cookies -> Cookies hết hạn
                 if "Sign in" in str(e) or "403" in str(e):
                     logging.error("❌ Cookies có thể đã hết hạn hoặc bị chặn.")
                 time.sleep(3)
@@ -198,7 +205,6 @@ def background_zip_worker(task_id, url):
             download_tasks[task_id]['progress'] = f"Đang tải {idx + 1}/{total}: {t['name']}"
             download_tasks[task_id]['percent'] = int(((idx) / total) * 100)
             
-            # Query đơn giản để YouTube tự tìm bản chuẩn nhất (Official Audio)
             query = f"{t['name']} {t['artist']} audio" 
             path = dl_engine(query, album_final_dir, f"{t['name']} - {t['artist']}", t['name'], t['artist'])
             
@@ -231,7 +237,7 @@ def background_zip_worker(task_id, url):
         except: pass
 
 @app.route('/')
-def idx(): return jsonify({"status":"YouTube (Cookies) Engine Ready"})
+def idx(): return jsonify({"status":"YouTube (Env Cookies) Engine Ready"})
 
 @app.route('/api/info', methods=['POST'])
 def info():
