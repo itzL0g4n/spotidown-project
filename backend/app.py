@@ -20,7 +20,9 @@ app = Flask(__name__)
 CORS(app)
 logging.basicConfig(level=logging.INFO)
 
-DOWNLOAD_FOLDER = 'downloads'
+# --- CẤU HÌNH ĐƯỜNG DẪN TUYỆT ĐỐI (FIX LỖI WINERROR 3) ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DOWNLOAD_FOLDER = os.path.join(BASE_DIR, 'downloads')
 TEMP_WORK_DIR = os.path.join(DOWNLOAD_FOLDER, 'temp_workspace')
 
 if not os.path.exists(DOWNLOAD_FOLDER): os.makedirs(DOWNLOAD_FOLDER)
@@ -40,24 +42,29 @@ except:
     sp = None
     logging.warning("⚠️ Spotify: Disconnected")
 
-# --- DỌN DẸP FILE CŨ ---
+# --- DỌN DẸP FILE CŨ (TIMEOUT 30 PHÚT) ---
 def cleanup_task():
     while True:
         try:
             now = time.time()
+            # 1. Dọn dẹp folder downloads
             for f in os.listdir(DOWNLOAD_FOLDER):
                 p = os.path.join(DOWNLOAD_FOLDER, f)
                 if f == 'temp_workspace': continue
-                if now - os.path.getctime(p) > 3600:
+                
+                # Xóa file cũ hơn 30 phút (1800s)
+                if now - os.path.getctime(p) > 1800:
                     if os.path.isfile(p): os.remove(p)
                     elif os.path.isdir(p): shutil.rmtree(p, ignore_errors=True)
             
+            # 2. Dọn dẹp temp workspace
             for f in os.listdir(TEMP_WORK_DIR):
                 p = os.path.join(TEMP_WORK_DIR, f)
                 if now - os.path.getctime(p) > 1800:
                     shutil.rmtree(p, ignore_errors=True)
 
-            keys_to_remove = [k for k, v in download_tasks.items() if now - v.get('timestamp', 0) > 3600]
+            # 3. Xóa task rác trong RAM
+            keys_to_remove = [k for k, v in download_tasks.items() if now - v.get('timestamp', 0) > 1800]
             for k in keys_to_remove:
                 del download_tasks[k]
         except: pass
@@ -65,7 +72,9 @@ def cleanup_task():
 
 threading.Thread(target=cleanup_task, daemon=True).start()
 
-def sanitize(n): return re.sub(r'[\\/*?:"<>|]', "", n).strip()
+def sanitize(n):
+    # Loại bỏ ký tự không an toàn cho tên file hệ thống
+    return re.sub(r'[\\/*?:"<>|]', "", n).strip()
 
 def get_all_tracks(sp_result, type='album'):
     tracks = []
@@ -105,37 +114,28 @@ def get_meta(url):
         return {'type':'album', 'name':a['name'], 'cover':a['images'][0]['url'], 'tracks':track_list}
     raise Exception("Link không hỗ trợ")
 
-# --- ENGINE TẢI NHẠC (YOUTUBE WITH ENV COOKIES) ---
+# --- ENGINE TẢI NHẠC ---
 def dl_engine(query, output_folder, final_name, meta_title, meta_artist):
     safe_name = sanitize(final_name)
     final_path = os.path.join(output_folder, f"{safe_name}.mp3")
     
+    # Nếu file đã tồn tại thì trả về luôn
     if os.path.exists(final_path): return final_path
 
     temp_id = str(uuid.uuid4())
     temp_dir = os.path.join(TEMP_WORK_DIR, f"temp_{temp_id}")
     os.makedirs(temp_dir, exist_ok=True)
 
-    # --- XỬ LÝ COOKIES TỪ BIẾN MÔI TRƯỜNG ---
-    cookie_file = 'cookies.txt'
-    
-    # Ưu tiên 1: Đọc từ biến môi trường COOKIES trên Render
+    cookie_file = os.path.join(BASE_DIR, 'cookies.txt')
     env_cookies = os.environ.get('COOKIES')
     if env_cookies:
         try:
-            # Ghi nội dung biến môi trường ra file cookies.txt
             with open(cookie_file, 'w', encoding='utf-8') as f:
                 f.write(env_cookies)
-            logging.info("🍪 Đã tạo cookies.txt từ biến môi trường COOKIES.")
-        except Exception as e:
-            logging.error(f"❌ Lỗi ghi file cookies từ Env: {e}")
+        except: pass
 
     has_cookies = os.path.exists(cookie_file)
     
-    if not has_cookies:
-        logging.warning("⚠️ Không tìm thấy cookies (File hoặc Env). YouTube có thể chặn 403.")
-
-    # Chiến lược: Ưu tiên YouTube -> Fallback SoundCloud
     strategies = [
         {'src': 'ytsearch1', 'name': 'YouTube'},
         {'src': 'scsearch1', 'name': 'SoundCloud'} 
@@ -144,11 +144,15 @@ def dl_engine(query, output_folder, final_name, meta_title, meta_artist):
     for strat in strategies:
         for attempt in range(2):
             try:
-                logging.info(f"🔎 Đang tìm '{query}' trên {strat['name']} (Lần {attempt+1})...")
+                logging.info(f"🔎 Đang tìm '{query}' trên {strat['name']}...")
                 
+                # Cấu hình yt-dlp
+                # QUAN TRỌNG: Sử dụng outtmpl đơn giản trong temp để tránh lỗi ký tự lạ
+                temp_filename_tmpl = os.path.join(temp_dir, 'downloaded_file.%(ext)s')
+
                 opts = {
                     'format': 'bestaudio/best',
-                    'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
+                    'outtmpl': temp_filename_tmpl, # Đặt tên cố định trong temp để dễ tìm
                     'default_search': strat['src'],
                     'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
                     'quiet': True, 'no_warnings': True, 'noplaylist': True,
@@ -156,31 +160,35 @@ def dl_engine(query, output_folder, final_name, meta_title, meta_artist):
                     'nocheckcertificate': True,
                 }
 
-                # Nạp cookies nếu tìm trên YouTube
                 if strat['src'] == 'ytsearch1' and has_cookies:
                     opts['cookiefile'] = cookie_file
 
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     ydl.download([query])
 
+                # Tìm file mp3 vừa tải trong temp (bất kể tên là gì)
                 files = [f for f in os.listdir(temp_dir) if f.endswith('.mp3')]
+                
                 if files:
-                    shutil.move(os.path.join(temp_dir, files[0]), final_path)
+                    downloaded_temp_path = os.path.join(temp_dir, files[0])
+                    
+                    # Di chuyển và đổi tên thành tên chuẩn (safe_name)
+                    shutil.move(downloaded_temp_path, final_path)
+                    
                     try:
                         tag = EasyID3(final_path)
                         tag['title'] = meta_title
                         tag['artist'] = meta_artist
                         tag.save()
                     except: pass
+                    
                     shutil.rmtree(temp_dir, ignore_errors=True)
-                    logging.info(f"✅ Thành công ({strat['name']}): {final_name}")
-                    return final_path
+                    logging.info(f"✅ Thành công: {final_path}")
+                    return final_path # Trả về đường dẫn tuyệt đối chính xác
             
             except Exception as e:
                 logging.warning(f"⚠️ {strat['name']} Lỗi: {str(e)}")
-                if "Sign in" in str(e) or "403" in str(e):
-                    logging.error("❌ Cookies có thể đã hết hạn hoặc bị chặn.")
-                time.sleep(3)
+                time.sleep(2)
             
             shutil.rmtree(temp_dir, ignore_errors=True)
             os.makedirs(temp_dir, exist_ok=True)
@@ -215,7 +223,7 @@ def background_zip_worker(task_id, url):
 
         if success_count == 0:
             download_tasks[task_id]['status'] = 'error'
-            download_tasks[task_id]['error'] = 'Lỗi: Không tải được bài nào (Kiểm tra Cookies/IP).'
+            download_tasks[task_id]['error'] = 'Lỗi: Không tải được bài nào.'
             shutil.rmtree(album_final_dir, ignore_errors=True)
             return
 
@@ -228,7 +236,8 @@ def background_zip_worker(task_id, url):
         
         download_tasks[task_id]['status'] = 'completed'
         download_tasks[task_id]['percent'] = 100
-        download_tasks[task_id]['download_url'] = f"/api/file/{zip_filename}"
+        # Trả về tên file chính xác đã được sanitize
+        download_tasks[task_id]['download_url'] = f"/api/file/{os.path.basename(zip_path)}"
         
     except Exception as e:
         download_tasks[task_id]['status'] = 'error'
@@ -237,7 +246,7 @@ def background_zip_worker(task_id, url):
         except: pass
 
 @app.route('/')
-def idx(): return jsonify({"status":"YouTube (Env Cookies) Engine Ready"})
+def idx(): return jsonify({"status":"Fixed Filename Encoding Engine Ready"})
 
 @app.route('/api/info', methods=['POST'])
 def info():
@@ -259,13 +268,18 @@ def dl_track():
         url = request.json.get('url')
         meta = get_meta(url)
         t = meta['tracks'][0]
+        # Gọi engine tải
         path = dl_engine(f"{t['name']} {t['artist']} audio", DOWNLOAD_FOLDER, f"{t['name']} - {t['artist']}", t['name'], t['artist'])
         
         if not path: return jsonify({'error':'Không tìm thấy bài hát'}), 404
         
+        # FIX QUAN TRỌNG: Trả về tên file thực tế từ hệ thống file (path) thay vì tên giả định
+        # os.path.basename(path) sẽ lấy đúng tên file "Ngày Đầu Sau Chia Tay - Đức Phúc.mp3" đã được lưu
+        actual_filename = os.path.basename(path)
+        
         return jsonify({
             "status": "success",
-            "download_url": f"/api/file/{os.path.basename(path)}"
+            "download_url": f"/api/file/{actual_filename}"
         })
     except Exception as e: return jsonify({'error':str(e)}), 500
 
@@ -290,7 +304,19 @@ def status_zip(task_id):
 
 @app.route('/api/file/<path:filename>', methods=['GET'])
 def get_file(filename):
-    return send_file(os.path.join(DOWNLOAD_FOLDER, filename), as_attachment=True)
+    # Sử dụng send_file an toàn
+    try:
+        # Đường dẫn tuyệt đối
+        file_path = os.path.join(DOWNLOAD_FOLDER, filename)
+        
+        if not os.path.exists(file_path):
+            logging.error(f"❌ File not found at: {file_path}")
+            return jsonify({'error': 'File not found'}), 404
+            
+        return send_file(file_path, as_attachment=True)
+    except Exception as e:
+        logging.error(f"❌ Error sending file: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
