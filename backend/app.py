@@ -92,7 +92,7 @@ def get_meta(url):
     if 'track' in url:
         t = sp.track(url)
         art = ", ".join([a['name'] for a in t['artists']])
-        return {'type':'track', 'name':t['name'], 'artist':art, 'cover':t['album']['images'][0]['url'], 'tracks':[{'name':t['name'], 'artist':art}]}
+        return {'type':'track', 'name':t['name'], 'artist':art, 'cover':t['album']['images'][0]['url'], 'tracks':[{'name':t['name'], 'artist':art, 'url': url}]}
     elif 'playlist' in url:
         p = sp.playlist(url)
         all_items = get_all_tracks(p, 'playlist')
@@ -101,7 +101,7 @@ def get_meta(url):
             if i.get('track'):
                 t_name = i['track']['name']
                 t_art = ", ".join([a['name'] for a in i['track']['artists']])
-                track_list.append({'name': t_name, 'artist': t_art})
+                track_list.append({'name': t_name, 'artist': t_art, 'url': i['track'].get('external_urls', {}).get('spotify')})
         return {'type':'playlist', 'name':p['name'], 'cover':p['images'][0]['url'], 'tracks':track_list}
     elif 'album' in url:
         a = sp.album(url)
@@ -110,7 +110,7 @@ def get_meta(url):
         for t in all_items:
             t_name = t['name']
             t_art = ", ".join([ar['name'] for ar in t['artists']])
-            track_list.append({'name': t_name, 'artist': t_art})
+            track_list.append({'name': t_name, 'artist': t_art, 'url': t.get('external_urls', {}).get('spotify')})
         return {'type':'album', 'name':a['name'], 'cover':a['images'][0]['url'], 'tracks':track_list}
     raise Exception("Link không hỗ trợ")
 
@@ -268,7 +268,8 @@ def info():
             'name': d['name'],
             'artist': d.get('artist', ''),
             'cover': d.get('cover', ''),
-            'tracks': [{'id': i, 'name': t['name'], 'artist': t['artist'], 'cover': d.get('cover')} 
+            'url': request.json.get('url'),
+            'tracks': [{'id': i, 'name': t['name'], 'artist': t['artist'], 'cover': d.get('cover'), 'url': t.get('url')} 
                        for i, t in enumerate(d['tracks'])]
         })
     except Exception as e: return jsonify({'error':str(e)}), 500
@@ -277,6 +278,7 @@ def info():
 def dl_track():
     try:
         url = request.json.get('url')
+        if not url: return jsonify({'error': 'Missing URL'}), 400
         meta = get_meta(url)
         t = meta['tracks'][0]
         # Gọi engine tải
@@ -292,7 +294,11 @@ def dl_track():
             "status": "success",
             "download_url": f"/api/file/{actual_filename}"
         })
-    except Exception as e: return jsonify({'error':str(e)}), 500
+    except Exception as e:
+        logging.error(f"❌ Error in dl_track: {str(e)}")
+        import traceback
+        logging.error(traceback.format_exc())
+        return jsonify({'error':str(e)}), 500
 
 @app.route('/api/start_zip', methods=['POST'])
 def start_zip():
