@@ -154,11 +154,11 @@ def dl_engine(query, output_folder, final_name, meta_title, meta_artist):
                     'format': 'bestaudio/best',
                     'outtmpl': temp_filename_tmpl, # Đặt tên cố định trong temp để dễ tìm
                     'default_search': strat['src'],
-                    'extractor_args': {
-                        'youtube': {
-                            'player_client': ['android', 'ios']
-                        }
-                    },
+                    # 'extractor_args': {
+                    #     'youtube': {
+                    #         'player_client': ['android', 'ios']
+                    #     }
+                    # },
                     'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}],
                     'quiet': True, 'no_warnings': True, 'noplaylist': True,
                     'socket_timeout': 30,
