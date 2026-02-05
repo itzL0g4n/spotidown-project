@@ -9,7 +9,7 @@ import TrackList from './components/TrackList';
 import DownloadHistory from './components/DownloadHistory';
 
 // --- CONFIG ---
-const API_BASE_URL = 'http://217.154.161.167:12065';
+const API_BASE_URL = 'https://spotidown-project.onrender.com';
 
 export default function App() {
   const [url, setUrl] = useState('');
