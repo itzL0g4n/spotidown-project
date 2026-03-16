@@ -2,6 +2,8 @@
 
 **SpotiDown** là một ứng dụng web mã nguồn mở cho phép tải xuống các bài hát, album và danh sách phát (playlist) từ Spotify dưới định dạng MP3 (320kbps). Ứng dụng tự động tìm kiếm nguồn nhạc chất lượng cao từ YouTube (Official Audio), chuyển đổi và gắn đầy đủ thông tin (Metadata) như ảnh bìa, tên nghệ sĩ, album.
 
+Vì Spotify đã cập nhật điều khoản cho nhà phát triển, nên từ nay bạn muốn lấy api Spotify sẽ cần có tài khoản premium.
+
 Demo (frontend only) :[Here](https://spotidown-web-kyso.onrender.com/)
 ---
 
